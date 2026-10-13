@@ -16,7 +16,8 @@
     "build:check": "node scripts/build.mjs --check",
     "test": "node test/run.mjs",
     "validate": "node scripts/validate.mjs",
-    "check": "npm run build:check && npm test && npm run validate"
+    "check": "npm run build:check && npm test && npm run validate",
+    "test:e2e": "node test/e2e/run.mjs"
   },
   "devDependencies": {
     "n8n": "2.40.7"

@@ -16,6 +16,8 @@ n8n import:workflow --separate --input=workflows/
 
 Each workflow has a stable id, so re-importing updates it instead of creating a duplicate.
 
+**Energy is two workflows.** Import both `06-energy-outage-ticket-poller.json` and `06-energy-outage-ticket-triage.json`, and activate only the poller. It fetches new tickets every two minutes and starts the triage workflow once per ticket, passing the gateway URL from its own Config.
+
 ## 3. Credentials
 
 Open each workflow and connect the credentials its Setup sticky lists. Nothing in this repository contains a credential.
@@ -33,7 +35,10 @@ Open each workflow and connect the credentials its Setup sticky lists. Nothing i
 
 ## 4. Config
 
-Each workflow has a **Config** node with every tunable in one place: base URLs, limits, tolerances, the confidence floor and Slack channels.
+Each workflow has a **Config** node with every tunable in one place: base URLs, limits, tolerances, the confidence floor and Slack channels. Two settings matter before going live:
+
+- **LegalTech `allowed_document_hosts`**: the document stores intake links may point at, mapped to the base URL each file is fetched from. A link on any other host goes to a person and is never downloaded.
+- **Real Estate `portal_writable_statuses`**: the application statuses the workflow may write over. An application in any other status (for example already approved) goes to a person.
 
 ## 5. Test
 

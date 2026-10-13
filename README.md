@@ -3,7 +3,8 @@
 [![CI](https://github.com/Aelix-Echo/aelix-agent-workflows/actions/workflows/ci.yml/badge.svg)](https://github.com/Aelix-Echo/aelix-agent-workflows/actions/workflows/ci.yml)
 ![n8n 2.40.7](https://img.shields.io/badge/n8n-2.40.7-EA4B71)
 ![Node 24+](https://img.shields.io/badge/node-%E2%89%A524-339933)
-![Guardrail tests: 609](https://img.shields.io/badge/guardrail%20tests-609-blue)
+![Guardrail tests: 844](https://img.shields.io/badge/guardrail%20tests-844-blue)
+![Live end-to-end: 25 of 27](https://img.shields.io/badge/live%20e2e-25%2F27-yellowgreen)
 
 n8n workflows for the Aelix Echo agents: 45 in all.
 
@@ -21,7 +22,7 @@ Each one runs the same loop: observe, plan, act, verify, hand off.
 | 3 | [`03-manufacturing-invoice-exception`](workflows/03-manufacturing-invoice-exception.json) | Manufacturing | Invoice exceptions: match, draft, escalate | Webhook |
 | 4 | [`04-logistics-shipment-exceptions`](workflows/04-logistics-shipment-exceptions.json) | Logistics | Shipment exceptions: trace, re-plan, escalate | Webhook |
 | 5 | [`05-legaltech-contract-intake`](workflows/05-legaltech-contract-intake.json) | LegalTech | Contract intake: classify and route | Webhook |
-| 6 | [`06-energy-outage-ticket-triage`](workflows/06-energy-outage-ticket-triage.json) | Energy & Utilities | Outage ticket triage: correlate and dispatch | Every 2 min |
+| 6 | [`06-energy-outage-ticket-triage`](workflows/06-energy-outage-ticket-triage.json) + [`poller`](workflows/06-energy-outage-ticket-poller.json) | Energy & Utilities | Outage ticket triage: correlate and dispatch | Every 2 min (poller starts one run per ticket) |
 | 7 | [`07-realestate-vendor-onboarding`](workflows/07-realestate-vendor-onboarding.json) | Real Estate & Construction | Vendor onboarding: document collection | Webhook |
 
 ## How every workflow is built
@@ -53,7 +54,7 @@ More in [docs/architecture.md](docs/architecture.md), including what each workfl
 
 ```bash
 psql "$DATABASE_URL" -f sql/schema.sql                 # 1. audit, exception and draft tables
-n8n import:workflow --separate --input=workflows/       # 2. the seven reference workflows
+n8n import:workflow --separate --input=workflows/       # 2. the seven reference workflows (Energy is two files)
 for d in workflows/products/*/; do n8n import:workflow --separate --input="$d"; done   # 3. the product agents
 ```
 
@@ -69,11 +70,14 @@ Then connect credentials, edit each **Config** node (including the named approve
 │   ├── product.mjs     Product-agent builder: approve, envelope and draft patterns
 │   ├── workflows/      One source file per reference workflow
 │   └── products/       One source file per product agent: prompts, tools, schema, rules, sample
-├── test/               Guardrail, approval, verification and hand-off scenarios (609)
+├── test/
+│   ├── workflows/      Offline scenarios for the reference workflows, one file per workflow
+│   ├── products/       Offline scenarios for the product agents, one file per suite
+│   └── e2e/            Live end-to-end suite: real n8n and Claude, mocked business systems
 ├── scripts/            build.mjs (source to JSON) and validate.mjs (n8n validator)
 ├── samples/            Example request payloads, one per workflow (products/ for the product agents)
 ├── sql/                Postgres schema: tamper-evident runs, exceptions, drafts, PA worklist
-├── docs/               Architecture and setup guides
+├── docs/               Architecture, setup and testing guides, and the product-agent catalogue
 └── .github/            CI, Dependabot, PR template, code owners
 ```
 
@@ -84,16 +88,21 @@ Every push runs [CI](.github/workflows/ci.yml):
 | Check | What it proves |
 |---|---|
 | Build check | The committed JSON, samples and docs/product-agents.md are exactly what the source generates |
-| Guardrail tests | 609 scenarios across all 45 workflows, on Node 22 and 24, with no network or model |
+| Guardrail tests | 844 scenarios across all 46 workflows, on Node 22 and 24, with no network or model |
 | n8n validation | Node parameters pass n8n's own schema validator; canvas layout and connections are sound |
 | Secret scan | No credentials anywhere in the git history |
 
 Run them locally with `npm run check`. See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow.
 
+On demand, `npm run test:e2e` runs every workflow end to end in a real n8n with real Claude, against mocked business systems, and checks each outcome and every write. It calls the Claude API (about $2 a run). See [docs/testing.md](docs/testing.md).
+
 ## Status
 
-- **Tested:** all 45 import into n8n 2.40.7 and pass its validator; every Code node compiles; the guardrail, approval, verification and hand-off logic passes 609 scenarios. The tamper-evident audit schema was exercised on a real Postgres engine (PGlite): chaining, refused updates and deletes, and tamper detection.
-- **Not yet tested:** live runs against Claude, Slack approvals, or the gateway APIs. The product agents call a gateway contract per product (named in each Setup sticky) that has to be built or mapped to the real systems. Run each workflow first with test-mode keys and staging endpoints.
+- **Offline:** all 46 workflows (7 reference workflows, one of them in two files, and 38 product agents) import into n8n 2.40.7 and pass its validator; every Code node compiles; the guardrail, approval, verification and hand-off logic passes 844 scenarios. The tamper-evident audit schema was exercised on a real Postgres engine (PGlite): chaining, refused updates and deletes, and tamper detection.
+- **Live, with real Claude (Opus 5) in real n8n (reference workflows):** the latest full run passed 25 of 27 cases across all seven. Every success path completed with exactly one verified write, and every escalation and prompt-injection case was stopped with no write.
+- **Known limitation:** in about 6% of live cases (4 of 64 across the post-fix runs), Claude's final answer fails n8n's output-format check. The workflow then escalates to a person with the error recorded and makes no write, so it fails safe, but that case needs a human that it would not otherwise have needed.
+- **Not yet tested live:** the 38 product agents, Slack approvals, and the real Stripe, Salesforce and gateway APIs (the live suite uses mocks with the same contracts). Each product agent calls a gateway contract named in its Setup sticky that has to be built or mapped to the real systems. Run every workflow first with test-mode keys and staging endpoints.
+- **Model:** Claude Opus 5. Opus 5.5 is not yet usable from n8n; see [docs/architecture.md](docs/architecture.md#model).
 
 ## Security
 

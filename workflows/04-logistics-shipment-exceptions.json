@@ -210,7 +210,8 @@
     {
       "parameters": {
         "schemaType": "manual",
-        "inputSchema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"root_cause\": {\n      \"type\": \"string\",\n      \"enum\": [\n        \"weather\",\n        \"carrier_capacity\",\n        \"missed_pickup\",\n        \"mechanical\",\n        \"address_issue\",\n        \"customs_hold\",\n        \"damage\",\n        \"other\"\n      ],\n      \"description\": \"Cause established from tracking.\"\n    },\n    \"sla_at_risk\": {\n      \"type\": \"boolean\",\n      \"description\": \"Current ETA misses the promised delivery.\"\n    },\n    \"promised_delivery\": {\n      \"type\": \"string\",\n      \"description\": \"ISO date promised to the customer.\"\n    },\n    \"options\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\",\n        \"properties\": {\n          \"option_id\": {\n            \"type\": \"string\",\n            \"description\": \"Short id, for example opt-1.\"\n          },\n          \"type\": {\n            \"type\": \"string\",\n            \"enum\": [\n              \"wait\",\n              \"rebook\",\n              \"expedite\"\n            ],\n            \"description\": \"Kind of re-plan.\"\n          },\n          \"carrier\": {\n            \"type\": \"string\",\n            \"description\": \"Carrier.\"\n          },\n          \"service\": {\n            \"type\": \"string\",\n            \"description\": \"Service level.\"\n          },\n          \"quote_id\": {\n            \"type\": [\n              \"string\",\n              \"null\"\n            ],\n            \"description\": \"Quote id for rebook or expedite. Null for wait.\"\n          },\n          \"cost_delta\": {\n            \"type\": \"number\",\n            \"description\": \"Extra cost against current booking. 0 for wait.\"\n          },\n          \"eta\": {\n            \"type\": \"string\",\n            \"description\": \"ISO date-time of expected delivery.\"\n          }\n        },\n        \"required\": [\n          \"option_id\",\n          \"type\",\n          \"carrier\",\n          \"service\",\n          \"quote_id\",\n          \"cost_delta\",\n          \"eta\"\n        ],\n        \"additionalProperties\": false\n      },\n      \"description\": \"Options considered.\"\n    },\n    \"recommended_option_id\": {\n      \"type\": [\n        \"string\",\n        \"null\"\n      ],\n      \"description\": \"option_id to take, or null when recommending escalate.\"\n    },\n    \"recommend_escalate\": {\n      \"type\": \"boolean\",\n      \"description\": \"A person must handle this case.\"\n    },\n    \"customer_notice\": {\n      \"type\": \"string\",\n      \"description\": \"Plain-language draft for the customer.\"\n    },\n    \"confidence\": {\n      \"type\": \"number\",\n      \"description\": \"0 to 1. How sure you are that the recommendation is right given what the tools returned. Below 0.5 means you are guessing.\"\n    },\n    \"rationale\": {\n      \"type\": \"string\",\n      \"description\": \"Two to five sentences a reviewer can check against the tool results. Cite the record ids you relied on.\"\n    },\n    \"questions_for_human\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"string\"\n      },\n      \"description\": \"If a person has to decide, the specific questions they need to answer. Empty when nothing is open.\"\n    }\n  },\n  \"required\": [\n    \"root_cause\",\n    \"sla_at_risk\",\n    \"promised_delivery\",\n    \"options\",\n    \"recommended_option_id\",\n    \"recommend_escalate\",\n    \"customer_notice\",\n    \"confidence\",\n    \"rationale\",\n    \"questions_for_human\"\n  ],\n  \"additionalProperties\": false\n}"
+        "inputSchema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"root_cause\": {\n      \"type\": \"string\",\n      \"enum\": [\n        \"weather\",\n        \"carrier_capacity\",\n        \"missed_pickup\",\n        \"mechanical\",\n        \"address_issue\",\n        \"customs_hold\",\n        \"damage\",\n        \"other\"\n      ],\n      \"description\": \"Cause established from tracking.\"\n    },\n    \"sla_at_risk\": {\n      \"type\": \"boolean\",\n      \"description\": \"Current ETA misses the promised delivery.\"\n    },\n    \"promised_delivery\": {\n      \"type\": \"string\",\n      \"description\": \"ISO date promised to the customer.\"\n    },\n    \"options\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\",\n        \"properties\": {\n          \"option_id\": {\n            \"type\": \"string\",\n            \"description\": \"Short id, for example opt-1.\"\n          },\n          \"type\": {\n            \"type\": \"string\",\n            \"enum\": [\n              \"wait\",\n              \"rebook\",\n              \"expedite\"\n            ],\n            \"description\": \"Kind of re-plan.\"\n          },\n          \"carrier\": {\n            \"type\": \"string\",\n            \"description\": \"Carrier.\"\n          },\n          \"service\": {\n            \"type\": \"string\",\n            \"description\": \"Service level.\"\n          },\n          \"quote_id\": {\n            \"type\": [\n              \"string\",\n              \"null\"\n            ],\n            \"description\": \"Quote id for rebook or expedite. Null for wait.\"\n          },\n          \"cost_delta\": {\n            \"type\": \"number\",\n            \"description\": \"Extra cost against current booking. 0 for wait.\"\n          },\n          \"eta\": {\n            \"type\": \"string\",\n            \"description\": \"ISO date-time of expected delivery.\"\n          }\n        },\n        \"required\": [\n          \"option_id\",\n          \"type\",\n          \"carrier\",\n          \"service\",\n          \"quote_id\",\n          \"cost_delta\",\n          \"eta\"\n        ],\n        \"additionalProperties\": false\n      },\n      \"description\": \"Options considered.\"\n    },\n    \"recommended_option_id\": {\n      \"type\": [\n        \"string\",\n        \"null\"\n      ],\n      \"description\": \"option_id to take, or null when recommending escalate.\"\n    },\n    \"recommend_escalate\": {\n      \"type\": \"boolean\",\n      \"description\": \"A person must handle this case.\"\n    },\n    \"customer_notice\": {\n      \"type\": \"string\",\n      \"description\": \"Plain-language draft for the customer.\"\n    },\n    \"confidence\": {\n      \"type\": \"number\",\n      \"description\": \"0 to 1. How sure you are that the recommendation is right given what the tools returned. Below 0.5 means you are guessing.\"\n    },\n    \"rationale\": {\n      \"type\": \"string\",\n      \"description\": \"Two to five sentences a reviewer can check against the tool results. Cite the record ids you relied on.\"\n    },\n    \"questions_for_human\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"string\"\n      },\n      \"description\": \"If a person has to decide, the specific questions they need to answer. Empty when nothing is open.\"\n    }\n  },\n  \"required\": [\n    \"root_cause\",\n    \"sla_at_risk\",\n    \"promised_delivery\",\n    \"options\",\n    \"recommended_option_id\",\n    \"recommend_escalate\",\n    \"customer_notice\",\n    \"confidence\",\n    \"rationale\",\n    \"questions_for_human\"\n  ],\n  \"additionalProperties\": false\n}",
+        "autoFix": true
       },
       "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
       "typeVersion": 1.3,
@@ -244,13 +245,37 @@
     },
     {
       "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.tms_base_url }}/shipments/{{ $('Normalize event').item.json.shipment_id }}/quotes",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ deliver_by: $json.promised_delivery ?? null }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        2110,
+        0
+      ],
+      "name": "Re-read quotes (TMS)",
+      "onError": "continueErrorOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "id": "a419cc2f-91f7-4a04-aac4-424dce0e08d2"
+    },
+    {
+      "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "// Deterministic checks. The agent's output is a proposal; nothing here trusts it\n// without comparing against config or a fresh read of the system of record.\nconst cfg = $('Config').first().json;\nconst out = $('Shipment exception agent').item.json.output ?? null;\nconst reasons = [];\nif (!out) reasons.push('agent_produced_no_valid_output');\nif (out && !(typeof out.confidence === 'number' && out.confidence >= cfg.min_confidence)) {\n  reasons.push('confidence ' + out?.confidence + ' below ' + cfg.min_confidence);\n}\n\nconst req = $('Normalize event').item.json;\nconst shp = $json; // fresh read\nconst pick = (out?.options ?? []).find((o) => o.option_id === out?.recommended_option_id) ?? null;\nconst promised = Date.parse(shp.promised_delivery ?? out?.promised_delivery ?? '');\n\nif (out?.recommend_escalate) reasons.push('agent recommends a person handles it');\nif (['damage', 'customs_hold', 'address_issue'].includes(out?.root_cause)) reasons.push('root cause ' + out.root_cause + ' always goes to a person');\nif (['DAMAGED', 'CUSTOMS_HOLD', 'HAZMAT', 'ADDRESS_ISSUE'].includes(req.event_code)) reasons.push('event code ' + req.event_code + ' always goes to a person');\nif (!pick) reasons.push('no recommended option');\nif (shp.status === 'delivered' || shp.status === 'cancelled') reasons.push('shipment is now ' + shp.status);\nif (pick && pick.type !== 'wait') {\n  if (!pick.quote_id) reasons.push('rebook/expedite without a quote id');\n  if (pick.cost_delta > cfg.max_rebook_cost_delta) reasons.push('cost delta ' + pick.cost_delta + ' above ' + cfg.max_rebook_cost_delta);\n  if (Number.isFinite(promised) && Date.parse(pick.eta) > promised) reasons.push('paid option still misses the promised date');\n}\nif (pick && Number.isNaN(Date.parse(pick.eta))) reasons.push('option ETA is not a valid date');\n\nconst ok = reasons.length === 0;\nreturn {\n  json: {\n    business_key: req.business_key,\n    route: ok ? 'auto' : 'escalate',\n    guardrail_reasons: reasons,\n    plan: pick ? { type: pick.type, quote_id: pick.quote_id, new_eta: pick.eta, carrier: pick.carrier } : null,\n    customer_email: shp.customer?.email ?? null,\n    planned_actions: ok ? [{ action: pick.type === 'wait' ? 'tms.update_eta' : 'tms.rebook', quote_id: pick.quote_id, eta: pick.eta }] : [],\n  },\n};"
+        "jsCode": "// Deterministic checks. The agent's output is a proposal; nothing here trusts it\n// without comparing against config or a fresh read of the system of record.\nconst cfg = $('Config').first().json;\n// n8n links each item back to the request it came from. That link can break after the AI\n// Agent node (seen live), so fall back to the node's output when it holds exactly one item,\n// which cannot be ambiguous.\nconst one = (name) => { try { return $(name).item.json; } catch (e) { const all = $(name).all(); if (all.length === 1) return all[0].json; throw e; } };\nlet out = null;\ntry { out = one('Shipment exception agent').output ?? null; } catch (e) {} // unreadable output is treated as none\n\nconst reasons = [];\nif (!out) reasons.push('agent_produced_no_valid_output');\nif (out && !(typeof out.confidence === 'number' && out.confidence >= cfg.min_confidence)) {\n  reasons.push('confidence ' + out?.confidence + ' below ' + cfg.min_confidence);\n}\n\nconst req = $('Normalize event').item.json;\nconst shp = $('Re-read shipment (TMS)').item.json; // fresh read of the shipment\nconst issued = $json; // fresh read of the quotes the TMS issues for it\nconst pick = (out?.options ?? []).find((o) => o.option_id === out?.recommended_option_id) ?? null;\nconst promised = Date.parse(shp.promised_delivery ?? ''); // TMS only, never the agent's value\nconst tmsEta = Date.parse(shp.eta ?? '');\nconst agentEta = Date.parse(pick?.eta ?? '');\nconst email = String(shp.customer?.email ?? '').trim();\nconst iso = (t) => (Number.isFinite(t) ? new Date(t).toISOString() : null);\n\nif (out?.recommend_escalate) reasons.push('agent recommends a person handles it');\nif (['damage', 'customs_hold', 'address_issue'].includes(out?.root_cause)) reasons.push('root cause ' + out.root_cause + ' always goes to a person');\n// Event codes vary by carrier (DAMAGE, DAMAGED, CUSTOMS, CUSTOMS_HOLD, hazmat...), so match by stem.\nconst code = String(req.event_code ?? '').toUpperCase().replace(/[^A-Z0-9]+/g, '_');\nif ([/DAMAG/, /CUSTOM/, /HAZ/, /DANGEROUS/, /ADDRESS/].some((r) => r.test(code))) reasons.push('event code ' + req.event_code + ' always goes to a person');\n// Hazmat comes from the TMS record. A missing flag is treated as unknown, and unknown goes to a person.\nconst haz = shp.hazmat;\nif (haz === undefined || haz === null || haz === '') reasons.push('TMS shipment has no hazmat flag');\nelse if (!(haz === false || haz === 0 || /^(false|no|n|0)$/i.test(String(haz)))) reasons.push('TMS shipment is flagged hazmat');\nif (String(shp.shipment_id ?? '') !== String(req.shipment_id ?? '')) reasons.push('TMS returned a different shipment');\nif (!pick) reasons.push('no recommended option');\nif (shp.status === 'delivered' || shp.status === 'cancelled') reasons.push('shipment is now ' + shp.status);\nif (!Number.isFinite(promised)) reasons.push('TMS shipment has no valid promised delivery date');\nif (!/^[^\\s@<>,;]+@[^\\s@<>,;]+\\.[^\\s@<>,;]+$/.test(email)) reasons.push('TMS shipment has no usable customer email, so nobody would be told');\nif (pick && !Number.isFinite(agentEta)) reasons.push('option ETA is not a valid date');\n\nlet quote = null;\nlet costDelta = null;\nif (pick && pick.type === 'wait') {\n  // The carrier's own ETA, from the TMS, must meet the promise. The agent's estimate must too.\n  if (!Number.isFinite(tmsEta)) reasons.push('TMS shipment has no valid current ETA');\n  else if (Number.isFinite(promised) && tmsEta > promised) reasons.push('wait: the carrier ETA in the TMS (' + shp.eta + ') misses the promised date');\n  if (Number.isFinite(agentEta) && Number.isFinite(promised) && agentEta > promised) reasons.push('wait: the agent ETA misses the promised date');\n} else if (pick) {\n  if (!pick.quote_id) reasons.push('rebook/expedite without a quote id');\n  else {\n    if (String(issued.shipment_id ?? '') !== String(req.shipment_id ?? '')) reasons.push('TMS quotes are for a different shipment');\n    quote = (Array.isArray(issued.quotes) ? issued.quotes : []).find((q) => q && String(q.quote_id) === String(pick.quote_id)) ?? null;\n    if (!quote) reasons.push('quote ' + pick.quote_id + ' is not among the quotes the TMS issues for this shipment');\n  }\n  if (quote) {\n    if (quote.type != null && quote.type !== pick.type) reasons.push('TMS quote is a ' + quote.type + ', not a ' + pick.type);\n    if (typeof quote.carrier !== 'string' || !quote.carrier.trim()) reasons.push('TMS quote has no carrier');\n    // Cost: the TMS cost delta, cross-checked against quote cost minus the current booking cost. The larger counts.\n    const deltas = [Number(quote.cost_delta ?? NaN)];\n    const base = Number(shp.current_booking?.cost ?? NaN);\n    if (quote.cost != null && Number.isFinite(base)) deltas.push(Number(quote.cost) - base);\n    costDelta = deltas.every(Number.isFinite) ? Math.max(...deltas) : null;\n    if (costDelta === null) reasons.push('TMS quote has no usable cost delta');\n    else if (costDelta > cfg.max_rebook_cost_delta) reasons.push('TMS cost delta ' + costDelta + ' above ' + cfg.max_rebook_cost_delta);\n    if (costDelta !== null && !(Math.abs(Number(pick.cost_delta) - costDelta) <= 1)) reasons.push('agent reported cost delta ' + pick.cost_delta + ' but the TMS quote says ' + costDelta);\n    if (quote.currency && shp.currency && quote.currency !== shp.currency) reasons.push('TMS quote currency ' + quote.currency + ' differs from the shipment currency ' + shp.currency);\n    if (quote.valid_until != null && !(Date.parse(quote.valid_until) > Date.now())) reasons.push('TMS quote has expired');\n    const quoteEta = Date.parse(quote.eta ?? '');\n    if (!Number.isFinite(quoteEta)) reasons.push('TMS quote ETA is not a valid date');\n    else if (Number.isFinite(promised) && quoteEta > promised) reasons.push('paid option still misses the promised date (TMS quote ETA ' + quote.eta + ')');\n  }\n}\n\n// The plan carries TMS values only. A wait writes the later of the carrier ETA and the agent's estimate.\nconst plan = !pick ? null : pick.type === 'wait'\n  ? { type: 'wait', quote_id: null, new_eta: iso(Math.max(tmsEta, agentEta)), carrier: shp.current_booking?.carrier ?? shp.carrier ?? null, booking_quote_id: shp.current_booking?.quote_id ?? null }\n  : { type: pick.type, quote_id: pick.quote_id ?? null, new_eta: quote ? iso(Date.parse(quote.eta ?? '')) : null, carrier: quote?.carrier ?? null, service: quote?.service ?? null, cost_delta: costDelta };\nif (plan && !plan.new_eta && !reasons.length) reasons.push('no valid ETA to plan with');\n\nconst ok = reasons.length === 0;\nreturn {\n  json: {\n    business_key: req.business_key,\n    route: ok ? 'auto' : 'escalate',\n    guardrail_reasons: reasons,\n    plan,\n    customer_email: email || null,\n    planned_actions: ok ? [{ action: plan.type === 'wait' ? 'tms.update_eta' : 'tms.rebook', quote_id: plan.quote_id, eta: plan.new_eta, carrier: plan.carrier, cost_delta: plan.type === 'wait' ? 0 : plan.cost_delta }] : [],\n  },\n};"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2110,
+        2330,
         0
       ],
       "name": "Guardrails",
@@ -285,7 +310,7 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.3,
       "position": [
-        2330,
+        2550,
         0
       ],
       "name": "Auto re-plan?",
@@ -320,7 +345,7 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.3,
       "position": [
-        2590,
+        2810,
         0
       ],
       "name": "Rebooking needed?",
@@ -349,7 +374,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.5,
       "position": [
-        2810,
+        3030,
         -130
       ],
       "name": "Book alternative (TMS)",
@@ -373,7 +398,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.5,
       "position": [
-        2810,
+        3030,
         130
       ],
       "name": "Update ETA (TMS)",
@@ -394,7 +419,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.5,
       "position": [
-        3030,
+        3250,
         0
       ],
       "name": "Read back shipment (TMS)",
@@ -407,12 +432,12 @@
     {
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "const plan = $('Guardrails').item.json.plan;\nconst s = $json;\nconst sameTime = (a, b) => Math.abs(Date.parse(a) - Date.parse(b)) < 60 * 1000;\nconst ok = plan.type === 'wait'\n  ? sameTime(s.eta, plan.new_eta)\n  : s.current_booking?.quote_id === plan.quote_id;\nreturn {\n  json: {\n    verified: ok,\n    verify_failed: !ok,\n    verify_detail: ok ? '' : 'TMS does not show the planned ' + (plan.type === 'wait' ? 'ETA' : 'booking'),\n  },\n};"
+        "jsCode": "// The read-back must match the plan built from TMS values. The customer notice then uses the\n// carrier and ETA from this read-back, never text the agent wrote.\nconst plan = $('Guardrails').item.json.plan;\nconst s = $json;\nconst booking = s.current_booking ?? {};\nconst sameTime = (a, b) => {\n  const x = Date.parse(a ?? '');\n  const y = Date.parse(b ?? '');\n  return Number.isFinite(x) && Number.isFinite(y) && Math.abs(x - y) < 60 * 1000;\n};\nconst clean = (t) => String(t ?? '').replace(/\\s+/g, ' ').trim().slice(0, 80);\nconst misses = [];\nif (!sameTime(s.eta, plan.new_eta)) misses.push('ETA ' + plan.new_eta);\nif (plan.type === 'wait') {\n  if (plan.booking_quote_id != null && booking.quote_id !== plan.booking_quote_id) misses.push('unchanged booking ' + plan.booking_quote_id);\n} else {\n  if (booking.quote_id !== plan.quote_id) misses.push('booking ' + plan.quote_id);\n  if (!clean(booking.carrier) || booking.carrier !== plan.carrier) misses.push('carrier ' + plan.carrier);\n}\nconst ok = misses.length === 0;\nreturn {\n  json: {\n    verified: ok,\n    verify_failed: !ok,\n    verify_detail: ok ? '' : 'TMS does not show the planned ' + misses.join(', '),\n    notice_type: plan.type,\n    notice_eta: ok ? new Date(Date.parse(s.eta)).toISOString() : null,\n    notice_carrier: ok ? clean(booking.carrier) : null,\n  },\n};"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        3250,
+        3470,
         0
       ],
       "name": "Verify re-plan",
@@ -447,7 +472,7 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.3,
       "position": [
-        3470,
+        3690,
         0
       ],
       "name": "Verified?",
@@ -460,7 +485,7 @@
         "sendTo": "={{ $('Guardrails').item.json.customer_email }}",
         "subject": "=Update on your shipment {{ $('Normalize event').item.json.tracking_number }}",
         "emailType": "text",
-        "message": "=Hello,\n\nYour shipment {{ $('Normalize event').item.json.tracking_number }} ran into a delay in transit. It is now expected to arrive on {{ new Date($('Guardrails').item.json.plan.new_eta).toUTCString().slice(0, 16) }}.{{ $('Guardrails').item.json.plan.type !== 'wait' ? ' We have moved it to ' + $('Guardrails').item.json.plan.carrier + ' to keep it on schedule, at no cost to you.' : '' }}\n\nWe will let you know if anything changes. Reply to this email if you need to talk to someone.",
+        "message": "=Hello,\n\nYour shipment {{ $('Normalize event').item.json.tracking_number }} ran into a delay in transit. It is now expected to arrive on {{ new Date($('Verify re-plan').item.json.notice_eta).toUTCString().slice(0, 16) }}.{{ $('Verify re-plan').item.json.notice_type !== 'wait' ? ' We have moved it to ' + $('Verify re-plan').item.json.notice_carrier + ' to keep it on schedule, at no cost to you.' : '' }}\n\nWe will let you know if anything changes. Reply to this email if you need to talk to someone.",
         "options": {
           "appendAttribution": false
         }
@@ -468,7 +493,7 @@
       "type": "n8n-nodes-base.gmail",
       "typeVersion": 2.2,
       "position": [
-        3690,
+        3910,
         0
       ],
       "name": "Notify customer",
@@ -493,7 +518,7 @@
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.5,
       "position": [
-        3910,
+        4130,
         0
       ],
       "name": "Mark completed",
@@ -502,12 +527,12 @@
     {
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "// Collects everything a reviewer needs in one record: the request, what the agent\n// proposed, why the guardrails stopped it, and the tool calls behind it.\nconst intake = $('Normalize event').item.json;\nlet agent = null;\nlet guard = null;\ntry { agent = $('Shipment exception agent').item.json; } catch (e) {}\ntry { guard = $('Guardrails').item.json; } catch (e) {}\n\nconst reasons = [...(guard?.guardrail_reasons ?? [])];\nif ($json.error) reasons.push('system_error: ' + ($json.error.message ?? JSON.stringify($json.error)).slice(0, 300));\nif ($json.verify_failed) reasons.push('verification_failed: ' + $json.verify_detail);\nif ($json.handoff_reason) reasons.push($json.handoff_reason);\nif (!agent?.output && !reasons.length) reasons.push('agent_produced_no_valid_output');\nif (!reasons.length) {\n  const o = agent.output;\n  reasons.push('agent recommends review: ' + (o.decision ?? o.recommended_action ?? o.classification ?? o.route_to_queue ?? 'see proposal'));\n}\n\nconst trace = (agent?.intermediateSteps ?? []).map((s) => ({\n  tool: s.action?.tool,\n  input: s.action?.toolInput,\n  observation: String(s.observation ?? '').slice(0, 1500),\n}));\n\nreturn {\n  json: {\n    business_key: intake.business_key,\n    team: \"logistics ops\",\n    reasons,\n    proposed: agent?.output ?? null,\n    confidence: agent?.output?.confidence ?? null,\n    questions: agent?.output?.questions_for_human ?? [],\n    trace,\n    summary: 'Shipment ' + intake.shipment_id + ' · ' + intake.event_code + ' · cause: ' + (agent?.output?.root_cause ?? 'unknown') + (agent?.output?.sla_at_risk ? ' · SLA at risk' : ''),\n  },\n};"
+        "jsCode": "// Collects everything a reviewer needs in one record: the request, what the agent\n// proposed, why the guardrails stopped it, and the tool calls behind it.\n// Every lookup is guarded: this node is the safety net, so it must never be the step that fails.\n// n8n links each item back to the request it came from. That link can break after the AI\n// Agent node (seen live), so fall back to the node's output when it holds exactly one item,\n// which cannot be ambiguous.\nconst one = (name) => { try { return $(name).item.json; } catch (e) { const all = $(name).all(); if (all.length === 1) return all[0].json; throw e; } };\nlet intake = null;\nlet agent = null;\nlet guard = null;\ntry { intake = one('Normalize event'); } catch (e) {}\ntry { agent = one('Shipment exception agent'); } catch (e) {}\ntry { guard = one('Guardrails'); } catch (e) {}\n\nconst reasons = [...(guard?.guardrail_reasons ?? [])];\nif (!intake) {\n  // n8n could not link this item back to its request. Keep whatever identifies it and say so.\n  intake = { business_key: $json.business_key ?? null };\n  reasons.push('item_context_lost: the request could not be linked to this failure; check the n8n execution');\n}\nif ($json.error) reasons.push('system_error: ' + ($json.error.message ?? JSON.stringify($json.error)).slice(0, 300));\nif ($json.verify_failed) reasons.push('verification_failed: ' + $json.verify_detail);\nif ($json.handoff_reason) reasons.push($json.handoff_reason);\nif (!agent?.output && !reasons.length) reasons.push('agent_produced_no_valid_output');\nif (!reasons.length) {\n  const o = agent.output;\n  reasons.push('agent recommends review: ' + (o.decision ?? o.recommended_action ?? o.classification ?? o.route_to_queue ?? 'see proposal'));\n}\n\nconst REDACT = [].map((p) => new RegExp(p, 'g'));\nconst scrub = (text) => REDACT.reduce((t, r) => t.replace(r, '[redacted]'), String(text ?? ''));\n// The masks also apply to what the model wrote, in case it repeated a number it read.\nconst scrubJson = (v) => {\n  if (!REDACT.length || v == null) return v;\n  try { return JSON.parse(scrub(JSON.stringify(v))); } catch (e) { return scrub(JSON.stringify(v)); }\n};\nconst trace = (agent?.intermediateSteps ?? []).map((s) => ({\n  tool: s.action?.tool,\n  input: s.action?.toolInput,\n  observation: scrub(s.observation).slice(0, 1500),\n}));\n\nconst summary = 'Shipment ' + intake.shipment_id + ' · ' + intake.event_code + ' · cause: ' + (agent?.output?.root_cause ?? 'unknown') + (agent?.output?.sla_at_risk ? ' · SLA at risk' : '');\n// Slack-safe copies: request, document and model text can contain Slack markup such as <!channel>.\nconst esc = (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nreturn {\n  json: {\n    business_key: intake.business_key,\n    team: \"logistics ops\",\n    reasons,\n    proposed: scrubJson(agent?.output ?? null),\n    confidence: agent?.output?.confidence ?? null,\n    questions: scrubJson(agent?.output?.questions_for_human ?? []),\n    trace,\n    summary,\n    slack: { key: esc(intake.business_key), summary: esc(summary), reasons: esc(reasons.join('; ')) },\n  },\n};"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2810,
+        3030,
         600
       ],
       "name": "Build exception",
@@ -524,7 +549,7 @@
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.7,
       "position": [
-        3050,
+        3270,
         600
       ],
       "name": "Queue exception",
@@ -540,7 +565,7 @@
           "value": "={{ $('Config').first().json.slack_channel }}",
           "mode": "name"
         },
-        "text": "={{ ':large_orange_circle: *Logistics · Shipment exception agent* needs a decision\\n' + 'Ref: ' + $('Build exception').item.json.business_key + ' · exception #' + $json.id + '\\n' + $('Build exception').item.json.summary + '\\n' + 'Why: ' + $('Build exception').item.json.reasons.join('; ') }}",
+        "text": "={{ ':large_orange_circle: *Logistics · Shipment exception agent* needs a decision\\n' + 'Ref: ' + $('Build exception').item.json.slack.key + ' · exception #' + $json.id + '\\n' + $('Build exception').item.json.slack.summary + '\\n' + 'Why: ' + $('Build exception').item.json.slack.reasons }}",
         "otherOptions": {
           "includeLinkToWorkflow": false
         }
@@ -548,7 +573,7 @@
       "type": "n8n-nodes-base.slack",
       "typeVersion": 2.7,
       "position": [
-        3290,
+        3510,
         600
       ],
       "name": "Notify logistics ops",
@@ -564,6 +589,12 @@
               "name": "outcome",
               "value": "escalated",
               "type": "string"
+            },
+            {
+              "id": "b303d456-02da-4d6a-aea8-f8be6e462bff",
+              "name": "business_key",
+              "value": "={{ $('Build exception').item.json.business_key }}",
+              "type": "string"
             }
           ]
         },
@@ -573,7 +604,7 @@
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.5,
       "position": [
-        3530,
+        3750,
         600
       ],
       "name": "Mark escalated",
@@ -582,12 +613,12 @@
     {
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "const intake = $('Normalize event').item.json;\nlet agent = null;\nlet guard = null;\nlet approval = null;\ntry { agent = $('Shipment exception agent').item.json; } catch (e) {}\ntry { guard = $('Guardrails').item.json; } catch (e) {}\n// Present only on workflows with a named-approver step, and only if this run reached it.\ntry { approval = $('Record approval').item.json; } catch (e) {}\n\nreturn {\n  json: {\n    business_key: intake.business_key,\n    outcome: $json.outcome,\n    approval: approval ? { decision: approval.decision, approver: approval.approver, decided_at: approval.decided_at } : null,\n    route: guard?.route ?? 'escalate',\n    decision: agent?.output ?? null,\n    guardrail_reasons: guard?.guardrail_reasons ?? [],\n    actions: guard?.planned_actions ?? [],\n    tool_calls: (agent?.intermediateSteps ?? []).length,\n  },\n};"
+        "jsCode": "// n8n links each item back to the request it came from. That link can break after the AI\n// Agent node (seen live), so fall back to the node's output when it holds exactly one item,\n// which cannot be ambiguous.\nconst one = (name) => { try { return $(name).item.json; } catch (e) { const all = $(name).all(); if (all.length === 1) return all[0].json; throw e; } };\nlet intake = null;\nlet agent = null;\nlet guard = null;\nlet approval = null;\ntry { intake = one('Normalize event'); } catch (e) {}\ntry { agent = one('Shipment exception agent'); } catch (e) {}\ntry { guard = one('Guardrails'); } catch (e) {}\n// Present only on workflows with a named-approver step, and only if this run reached it.\ntry { approval = one('Record approval'); } catch (e) {}\n\nreturn {\n  json: {\n    // Escalated runs carry the key from Build exception, so the audit row is written even if\n    // the request itself could not be looked up.\n    business_key: intake?.business_key ?? $json.business_key ?? null,\n    outcome: $json.outcome,\n    approval: approval ? { decision: approval.decision, approver: approval.approver, decided_at: approval.decided_at } : null,\n    route: guard?.route ?? 'escalate',\n    decision: agent?.output ?? null,\n    guardrail_reasons: guard?.guardrail_reasons ?? [],\n    actions: guard?.planned_actions ?? [],\n    tool_calls: (agent?.intermediateSteps ?? []).length,\n  },\n};"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        4170,
+        4390,
         300
       ],
       "name": "Build audit record",
@@ -604,7 +635,7 @@
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.7,
       "position": [
-        4410,
+        4630,
         300
       ],
       "name": "Write audit record",
@@ -644,9 +675,9 @@
     },
     {
       "parameters": {
-        "content": "## 3 · Guardrails\nShipment is **re-read**. Damage, customs, hazmat and address issues always go to a person. A paid option needs a quote id, a cost under the limit, and an ETA that recovers the promise.",
+        "content": "## 3 · Guardrails\nThe shipment and its quotes are **re-read** from the TMS. Damage, customs, hazmat (event code or TMS flag) and address issues always go to a person, as does a shipment with no promised date or no customer email.\nA paid option needs a quote the TMS issued, with a TMS cost under the limit and a TMS ETA that recovers the promise. A wait needs a carrier ETA in the TMS that meets the promise.",
         "height": 421,
-        "width": 640,
+        "width": 860,
         "color": 3
       },
       "type": "n8n-nodes-base.stickyNote",
@@ -660,7 +691,7 @@
     },
     {
       "parameters": {
-        "content": "## 4 · Act and verify\nRebooks on the quoted option (idempotent), or just updates the ETA. The TMS is read back and must show the planned booking or ETA before the customer gets the **templated** notice.",
+        "content": "## 4 · Act and verify\nRebooks on the quoted option (idempotent), or just updates the ETA. The TMS is read back and must show the planned booking, carrier and ETA before the customer gets the **templated** notice, filled from that read-back.",
         "height": 551,
         "width": 1520,
         "color": 4
@@ -668,7 +699,7 @@
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
       "position": [
-        2540,
+        2760,
         -246
       ],
       "name": "Stage: act and verify",
@@ -684,7 +715,7 @@
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
       "position": [
-        2760,
+        2980,
         462
       ],
       "name": "Stage: hand off",
@@ -700,7 +731,7 @@
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
       "position": [
-        4120,
+        4340,
         184
       ],
       "name": "Stage: audit",
@@ -708,8 +739,8 @@
     },
     {
       "parameters": {
-        "content": "## Logistics · Shipment exception agent\n**Job:** take carrier exceptions off the ops desk. Trace what happened, re-plan when the delivery promise is at risk, carry out small re-plans, and escalate the rest with options already priced.\n\n**Flow:** carrier event → agent traces and quotes (read-only) → guardrails re-read and check → rebook or update ETA, read back, notify the customer → escalate the rest → audit.\n\n**Never does**\n- Books above the cost limit, or an option that still misses the promise\n- Handles damage, customs, hazmat or address problems\n- Sends model-written text to customers\n\n**Model:** Claude Opus 5, adaptive thinking, effort high.",
-        "height": 372,
+        "content": "## Logistics · Shipment exception agent\n**Job:** take carrier exceptions off the ops desk. Trace what happened, re-plan when the delivery promise is at risk, carry out small re-plans, and escalate the rest with options already priced.\n\n**Flow:** carrier event → agent traces and quotes (read-only) → guardrails re-read and check → rebook or update ETA, read back, notify the customer → escalate the rest → audit.\n\n**Never does**\n- Books above the cost limit, or an option that still misses the promise\n- Handles damage, customs, hazmat or address problems\n- Re-plans when nobody can be told (no customer email in the TMS)\n- Sends model-written text to customers\n\n**Model:** Claude Opus 5, adaptive thinking, effort high.",
+        "height": 394,
         "width": 620,
         "color": 5
       },
@@ -724,8 +755,8 @@
     },
     {
       "parameters": {
-        "content": "## Setup\n1. Run **sql/schema.sql**. Select the Postgres credential on *Queue exception* and *Write audit record*.\n2. Credentials: **Anthropic**, **Header Auth** for the TMS API, **Gmail**, **Slack**.\n3. **TMS endpoints are a gateway contract**: shipments, events, order, quotes, rebook. Map them to your TMS (Oracle OTM, Blue Yonder, MercuryGate, e2open) or to project44 / FourKites for tracking.\n4. Edit **Config**: TMS URL, cost limit, confidence floor, channel.\n5. Test: `curl -X POST <test webhook URL> -H 'Content-Type: application/json' -d @samples/logistics-shipment-exception.json`",
-        "height": 292,
+        "content": "## Setup\n1. Run **sql/schema.sql**. Select the Postgres credential on *Queue exception* and *Write audit record*.\n2. Credentials: **Anthropic**, **Header Auth** for the TMS API, **Gmail**, **Slack**.\n3. **TMS endpoints are a gateway contract**: shipments, events, order, quotes, rebook. The shipment record must carry promised_delivery, eta, hazmat, current_booking and customer.email; quotes must return the issued quote ids. Map them to your TMS (Oracle OTM, Blue Yonder, MercuryGate, e2open) or to project44 / FourKites for tracking.\n4. Edit **Config**: TMS URL, cost limit, confidence floor, channel.\n5. Test: `curl -X POST <test webhook URL> -H 'Content-Type: application/json' -d @samples/logistics-shipment-exception.json`",
+        "height": 314,
         "width": 620,
         "color": 1
       },
@@ -733,7 +764,7 @@
       "typeVersion": 1,
       "position": [
         -1000,
-        -8
+        14
       ],
       "name": "Setup",
       "id": "a73b9134-42c8-4307-a696-3022872b4a96"
@@ -767,6 +798,11 @@
         [
           {
             "node": "Shipment exception agent",
+            "type": "ai_languageModel",
+            "index": 0
+          },
+          {
+            "node": "Shipment exception agent · output schema",
             "type": "ai_languageModel",
             "index": 0
           }
@@ -858,6 +894,24 @@
       ]
     },
     "Re-read shipment (TMS)": {
+      "main": [
+        [
+          {
+            "node": "Re-read quotes (TMS)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build exception",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Re-read quotes (TMS)": {
       "main": [
         [
           {

@@ -77,7 +77,7 @@
     {
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "// Only identifiers and codes travel into the prompt. Clinical detail is fetched\n// by the agent from the EHR, so nothing extra is copied around.\nconst b = $json.body ?? $json;\nconst missing = ['request_id', 'patient_id', 'coverage_id'].filter((k) => !b[k]);\nif (missing.length) throw new Error('Prior-auth request missing fields: ' + missing.join(', '));\nconst svc = b.service ?? {};\nif (!Array.isArray(svc.cpt_codes) || !svc.cpt_codes.length) throw new Error('Prior-auth request has no CPT codes');\n\nreturn {\n  json: {\n    business_key: String(b.request_id),\n    request_id: String(b.request_id),\n    patient_id: String(b.patient_id),\n    coverage_id: String(b.coverage_id),\n    ordering_provider_npi: String(b.ordering_provider?.npi ?? ''),\n    cpt_codes: svc.cpt_codes.map(String),\n    icd10_codes: (svc.icd10_codes ?? []).map(String),\n    service_description: String(svc.description ?? '').slice(0, 500),\n    requested_date: svc.requested_date ?? null,\n    requested_urgency: b.urgency === 'expedited' ? 'expedited' : 'standard',\n    documents: (b.documents ?? []).map((d) => ({ type: String(d.type ?? 'unknown'), url: String(d.url ?? '') })),\n  },\n};"
+        "jsCode": "// Only identifiers and codes travel into the prompt. Clinical detail is fetched\n// by the agent from the EHR, so nothing extra is copied around.\n// The webhook has already answered 202, so this node never throws: a malformed request\n// is marked invalid with a handoff_reason and routed to the hand-off, where a person sees it.\nconst b = ($json.body && typeof $json.body === 'object' ? $json.body : $json) ?? {};\nconst svc = b.service && typeof b.service === 'object' ? b.service : {};\nconst problems = [];\nconst missing = ['request_id', 'patient_id', 'coverage_id'].filter((k) => b[k] == null || String(b[k]).trim() === '');\nif (missing.length) problems.push('missing fields: ' + missing.join(', '));\nconst cpt = Array.isArray(svc.cpt_codes) ? svc.cpt_codes.map((c) => String(c ?? '').trim()).filter(Boolean) : [];\nif (!cpt.length) problems.push('no CPT codes');\n\n// Urgency is never downgraded. Case and spacing are ignored, and known urgent synonyms\n// count as expedited. Missing or empty means the office did not ask for expedited review.\n// Any other value is treated as expedited (never lower) and the guardrails send the case\n// to a person to confirm, because guessing \"standard\" could delay an urgent patient.\nconst URGENT = ['expedited', 'urgent', 'stat', 'emergent', 'emergency', 'asap', 'expedite'];\nconst STANDARD = ['standard', 'routine', 'normal', 'non-urgent', 'nonurgent', 'elective'];\nconst rawUrgency = b.urgency == null ? '' : String(b.urgency).trim().toLowerCase().replace(/[\\s_]+/g, ' ');\nlet requested_urgency = 'standard';\nlet urgency_unrecognised = null;\nif (URGENT.includes(rawUrgency)) requested_urgency = 'expedited';\nelse if (rawUrgency && !STANDARD.includes(rawUrgency.replace(/ /g, '-'))) {\n  requested_urgency = 'expedited';\n  urgency_unrecognised = String(b.urgency).slice(0, 50);\n}\n\nconst id = (k) => (b[k] == null ? '' : String(b[k]).trim());\nreturn {\n  json: {\n    valid: problems.length === 0,\n    handoff_reason: problems.length ? 'intake_rejected: prior-auth request ' + problems.join('; ') : null,\n    business_key: id('request_id') || null,\n    request_id: id('request_id'),\n    patient_id: id('patient_id'),\n    coverage_id: id('coverage_id'),\n    ordering_provider_npi: String(b.ordering_provider?.npi ?? ''),\n    cpt_codes: cpt,\n    icd10_codes: (Array.isArray(svc.icd10_codes) ? svc.icd10_codes : []).map(String),\n    service_description: String(svc.description ?? '').slice(0, 500),\n    requested_date: svc.requested_date ?? null,\n    requested_urgency,\n    urgency_unrecognised,\n    documents: (Array.isArray(b.documents) ? b.documents : []).filter((d) => d && typeof d === 'object')\n      .map((d) => ({ type: String(d.type ?? 'unknown'), url: String(d.url ?? '') })),\n  },\n};"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -87,6 +87,41 @@
       ],
       "name": "Normalize request",
       "id": "f63f07c2-be80-4e6c-a019-01da026505a5"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "e6746f5a-c2f9-4da8-afb7-92d0fab04592",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        660,
+        0
+      ],
+      "name": "Request complete?",
+      "id": "68fbba33-7b58-4df4-a209-fbfda4141c05"
     },
     {
       "parameters": {
@@ -103,7 +138,7 @@
       "type": "@n8n/n8n-nodes-langchain.agent",
       "typeVersion": 3.1,
       "position": [
-        1210,
+        1430,
         0
       ],
       "name": "Prior-auth agent",
@@ -128,7 +163,7 @@
       "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
       "typeVersion": 1.6,
       "position": [
-        700,
+        920,
         240
       ],
       "name": "Prior-auth agent · Claude",
@@ -147,7 +182,7 @@
       "type": "n8n-nodes-base.httpRequestTool",
       "typeVersion": 4.5,
       "position": [
-        890,
+        1110,
         240
       ],
       "name": "Get patient (FHIR)",
@@ -166,7 +201,7 @@
       "type": "n8n-nodes-base.httpRequestTool",
       "typeVersion": 4.5,
       "position": [
-        1080,
+        1300,
         240
       ],
       "name": "Get coverage (FHIR)",
@@ -202,7 +237,7 @@
       "type": "n8n-nodes-base.httpRequestTool",
       "typeVersion": 4.5,
       "position": [
-        1270,
+        1490,
         240
       ],
       "name": "List active conditions (FHIR)",
@@ -242,7 +277,7 @@
       "type": "n8n-nodes-base.httpRequestTool",
       "typeVersion": 4.5,
       "position": [
-        1460,
+        1680,
         240
       ],
       "name": "List clinical documents (FHIR)",
@@ -274,7 +309,7 @@
       "type": "n8n-nodes-base.httpRequestTool",
       "typeVersion": 4.5,
       "position": [
-        1650,
+        1870,
         240
       ],
       "name": "Get payer criteria",
@@ -283,12 +318,13 @@
     {
       "parameters": {
         "schemaType": "manual",
-        "inputSchema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"patient_found\": {\n      \"type\": \"boolean\",\n      \"description\": \"The patient record exists.\"\n    },\n    \"coverage_active\": {\n      \"type\": \"boolean\",\n      \"description\": \"Coverage is active on the requested date.\"\n    },\n    \"payer_name\": {\n      \"type\": [\n        \"string\",\n        \"null\"\n      ],\n      \"description\": \"Payer name from coverage.\"\n    },\n    \"pa_required\": {\n      \"type\": \"string\",\n      \"enum\": [\n        \"yes\",\n        \"no\",\n        \"unknown\"\n      ],\n      \"description\": \"Whether the payer requires PA for these codes.\"\n    },\n    \"packet\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\",\n        \"properties\": {\n          \"item\": {\n            \"type\": \"string\",\n            \"description\": \"What the payer expects, for example \\\"PT notes covering 6 weeks of conservative treatment\\\".\"\n          },\n          \"required_by\": {\n            \"type\": \"string\",\n            \"description\": \"Which payer criterion asks for it.\"\n          },\n          \"status\": {\n            \"type\": \"string\",\n            \"enum\": [\n              \"present\",\n              \"missing\",\n              \"unclear\"\n            ],\n            \"description\": \"Whether you found it.\"\n          },\n          \"source\": {\n            \"type\": \"string\",\n            \"description\": \"FHIR reference or document URL where it was found, empty when missing.\"\n          }\n        },\n        \"required\": [\n          \"item\",\n          \"required_by\",\n          \"status\",\n          \"source\"\n        ],\n        \"additionalProperties\": false\n      },\n      \"description\": \"Packet checklist built from payer criteria.\"\n    },\n    \"missing_items\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"string\"\n      },\n      \"description\": \"Plain-language list of items still needed.\"\n    },\n    \"urgency_assessment\": {\n      \"type\": \"string\",\n      \"enum\": [\n        \"standard\",\n        \"expedited\"\n      ],\n      \"description\": \"Your urgency assessment.\"\n    },\n    \"expedite_reason\": {\n      \"type\": \"string\",\n      \"description\": \"Why expedited, or empty.\"\n    },\n    \"route_queue\": {\n      \"type\": \"string\",\n      \"enum\": [\n        \"ready_for_submission_review\",\n        \"needs_documents\",\n        \"clinical_review\",\n        \"no_pa_required_confirm\"\n      ],\n      \"description\": \"Worklist queue.\"\n    },\n    \"reviewer_summary\": {\n      \"type\": \"string\",\n      \"description\": \"Two to four sentences for the coordinator. Minimum necessary.\"\n    },\n    \"confidence\": {\n      \"type\": \"number\",\n      \"description\": \"0 to 1. How sure you are that the recommendation is right given what the tools returned. Below 0.5 means you are guessing.\"\n    },\n    \"rationale\": {\n      \"type\": \"string\",\n      \"description\": \"Two to five sentences a reviewer can check against the tool results. Cite the record ids you relied on.\"\n    },\n    \"questions_for_human\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"string\"\n      },\n      \"description\": \"If a person has to decide, the specific questions they need to answer. Empty when nothing is open.\"\n    }\n  },\n  \"required\": [\n    \"patient_found\",\n    \"coverage_active\",\n    \"payer_name\",\n    \"pa_required\",\n    \"packet\",\n    \"missing_items\",\n    \"urgency_assessment\",\n    \"expedite_reason\",\n    \"route_queue\",\n    \"reviewer_summary\",\n    \"confidence\",\n    \"rationale\",\n    \"questions_for_human\"\n  ],\n  \"additionalProperties\": false\n}"
+        "inputSchema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"patient_found\": {\n      \"type\": \"boolean\",\n      \"description\": \"The patient record exists.\"\n    },\n    \"coverage_active\": {\n      \"type\": \"boolean\",\n      \"description\": \"Coverage is active on the requested date.\"\n    },\n    \"payer_name\": {\n      \"type\": [\n        \"string\",\n        \"null\"\n      ],\n      \"description\": \"Payer name from coverage.\"\n    },\n    \"pa_required\": {\n      \"type\": \"string\",\n      \"enum\": [\n        \"yes\",\n        \"no\",\n        \"unknown\"\n      ],\n      \"description\": \"Whether the payer requires PA for these codes.\"\n    },\n    \"packet\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\",\n        \"properties\": {\n          \"item\": {\n            \"type\": \"string\",\n            \"description\": \"What the payer expects, for example \\\"PT notes covering 6 weeks of conservative treatment\\\".\"\n          },\n          \"required_by\": {\n            \"type\": \"string\",\n            \"description\": \"Which payer criterion asks for it.\"\n          },\n          \"status\": {\n            \"type\": \"string\",\n            \"enum\": [\n              \"present\",\n              \"missing\",\n              \"unclear\"\n            ],\n            \"description\": \"Whether you found it.\"\n          },\n          \"source\": {\n            \"type\": \"string\",\n            \"description\": \"Exactly one FHIR reference as a tool returned it, such as DocumentReference/123, or one document URL from the request. Nothing else in this field. Empty when missing.\"\n          }\n        },\n        \"required\": [\n          \"item\",\n          \"required_by\",\n          \"status\",\n          \"source\"\n        ],\n        \"additionalProperties\": false\n      },\n      \"description\": \"Packet checklist built from payer criteria.\"\n    },\n    \"missing_items\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"string\"\n      },\n      \"description\": \"Plain-language list of items still needed.\"\n    },\n    \"urgency_assessment\": {\n      \"type\": \"string\",\n      \"enum\": [\n        \"standard\",\n        \"expedited\"\n      ],\n      \"description\": \"Your urgency assessment.\"\n    },\n    \"expedite_reason\": {\n      \"type\": \"string\",\n      \"description\": \"Why expedited, or empty.\"\n    },\n    \"route_queue\": {\n      \"type\": \"string\",\n      \"enum\": [\n        \"ready_for_submission_review\",\n        \"needs_documents\",\n        \"clinical_review\",\n        \"no_pa_required_confirm\"\n      ],\n      \"description\": \"Worklist queue.\"\n    },\n    \"reviewer_summary\": {\n      \"type\": \"string\",\n      \"description\": \"Two to four sentences for the coordinator. Minimum necessary.\"\n    },\n    \"confidence\": {\n      \"type\": \"number\",\n      \"description\": \"0 to 1. How sure you are that the recommendation is right given what the tools returned. Below 0.5 means you are guessing.\"\n    },\n    \"rationale\": {\n      \"type\": \"string\",\n      \"description\": \"Two to five sentences a reviewer can check against the tool results. Cite the record ids you relied on.\"\n    },\n    \"questions_for_human\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"string\"\n      },\n      \"description\": \"If a person has to decide, the specific questions they need to answer. Empty when nothing is open.\"\n    }\n  },\n  \"required\": [\n    \"patient_found\",\n    \"coverage_active\",\n    \"payer_name\",\n    \"pa_required\",\n    \"packet\",\n    \"missing_items\",\n    \"urgency_assessment\",\n    \"expedite_reason\",\n    \"route_queue\",\n    \"reviewer_summary\",\n    \"confidence\",\n    \"rationale\",\n    \"questions_for_human\"\n  ],\n  \"additionalProperties\": false\n}",
+        "autoFix": true
       },
       "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
       "typeVersion": 1.3,
       "position": [
-        1840,
+        2060,
         240
       ],
       "name": "Prior-auth agent · output schema",
@@ -296,13 +332,55 @@
     },
     {
       "parameters": {
+        "method": "GET",
+        "url": "={{ $('Config').first().json.fhir_base_url }}/Patient/{{ encodeURIComponent($('Normalize request').item.json.patient_id) }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        2300,
+        0
+      ],
+      "name": "Re-read patient (FHIR)",
+      "onError": "continueErrorOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "id": "a12fcf4e-3280-4e9a-a0ed-ab5be6060c91"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Config').first().json.fhir_base_url }}/Coverage/{{ encodeURIComponent($('Normalize request').item.json.coverage_id) }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        2520,
+        0
+      ],
+      "name": "Re-read coverage (FHIR)",
+      "onError": "continueErrorOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "id": "56f2ffe6-a060-4a9b-ad0d-ad1132cb83c6"
+    },
+    {
+      "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "// Deterministic checks. The agent's output is a proposal; nothing here trusts it\n// without comparing against config or a fresh read of the system of record.\nconst cfg = $('Config').first().json;\nconst out = $('Prior-auth agent').item.json.output ?? null;\nconst reasons = [];\nif (!out) reasons.push('agent_produced_no_valid_output');\nif (out && !(typeof out.confidence === 'number' && out.confidence >= cfg.min_confidence)) {\n  reasons.push('confidence ' + out?.confidence + ' below ' + cfg.min_confidence);\n}\n\nconst req = $('Normalize request').item.json;\nif (out) {\n  if (!out.patient_found) reasons.push('patient not found');\n  if (!out.coverage_active) reasons.push('coverage not active on requested date');\n  if (out.pa_required === 'unknown') reasons.push('could not determine whether PA is required');\n  if (out.urgency_assessment !== req.requested_urgency) {\n    reasons.push('urgency: office asked ' + req.requested_urgency + ', agent assessed ' + out.urgency_assessment);\n  }\n  const unsourced = (out.packet ?? []).filter((p) => p.status === 'present' && !p.source);\n  if (unsourced.length) reasons.push(unsourced.length + ' packet items marked present without a source');\n  if (out.route_queue === 'ready_for_submission_review' && (out.packet ?? []).some((p) => p.status !== 'present')) {\n    reasons.push('marked ready but packet has missing or unclear items');\n  }\n}\n\nconst ok = reasons.length === 0;\nreturn {\n  json: {\n    business_key: req.business_key,\n    route: ok ? 'auto' : 'escalate',\n    guardrail_reasons: reasons,\n    planned_actions: ok ? [{ action: 'worklist.insert', queue: out.route_queue, urgency: out.urgency_assessment }] : [],\n  },\n};"
+        "jsCode": "// Deterministic checks. The agent's output is a proposal; nothing here trusts it\n// without comparing against config or a fresh read of the system of record.\nconst cfg = $('Config').first().json;\n// n8n links each item back to the request it came from. That link can break after the AI\n// Agent node (seen live), so fall back to the node's output when it holds exactly one item,\n// which cannot be ambiguous.\nconst one = (name) => { try { return $(name).item.json; } catch (e) { const all = $(name).all(); if (all.length === 1) return all[0].json; throw e; } };\nlet out = null;\ntry { out = one('Prior-auth agent').output ?? null; } catch (e) {} // unreadable output is treated as none\n\nconst reasons = [];\nif (!out) reasons.push('agent_produced_no_valid_output');\nif (out && !(typeof out.confidence === 'number' && out.confidence >= cfg.min_confidence)) {\n  reasons.push('confidence ' + out?.confidence + ' below ' + cfg.min_confidence);\n}\n\nconst req = $('Normalize request').item.json;\nconst patient = $('Re-read patient (FHIR)').item.json ?? {}; // fresh read, not what the agent saw\nconst cov = $json ?? {};                         // fresh read of the Coverage\nconst norm = (s) => String(s ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();\nconst packet = Array.isArray(out?.packet) ? out.packet : [];\n\n// Patient and coverage, checked against the EHR rather than the agent's booleans.\nif (patient.resourceType !== 'Patient' || String(patient.id ?? '') !== req.patient_id) reasons.push('patient ' + req.patient_id + ' not found in the EHR');\nif (cov.resourceType !== 'Coverage' || String(cov.id ?? '') !== req.coverage_id) reasons.push('coverage ' + req.coverage_id + ' not found in the EHR');\nelse {\n  if (cov.status !== 'active') reasons.push('coverage status is ' + (cov.status ?? 'missing') + ', not active');\n  const on = String(req.requested_date ?? new Date().toISOString()).slice(0, 10);\n  const start = cov.period?.start ? String(cov.period.start).slice(0, 10) : null;\n  const end = cov.period?.end ? String(cov.period.end).slice(0, 10) : null;\n  if ((start && on < start) || (end && on > end)) reasons.push('coverage period ' + (start ?? '?') + ' to ' + (end ?? '?') + ' does not include ' + on);\n  const beneficiary = String(cov.beneficiary?.reference ?? '').replace(/^.*Patient\\//, '');\n  if (beneficiary !== req.patient_id) reasons.push('coverage does not belong to patient ' + req.patient_id);\n  // Payer: the agent's payer must be one the Coverage names (display, payer id or Organization id).\n  const payers = (Array.isArray(cov.payor) ? cov.payor : []).flatMap((p) => [\n    p?.display, String(p?.display ?? '').replace(/\\s*\\([^)]*\\)\\s*$/, ''), p?.identifier?.value, String(p?.reference ?? '').replace(/^.*Organization\\//, ''),\n  ]).map(norm).filter(Boolean);\n  if (!payers.length) reasons.push('coverage names no payer');\n  else if (out && !payers.includes(norm(out.payer_name))) reasons.push('payer: agent said ' + (out.payer_name ?? 'none') + ', coverage does not name that payer');\n}\n\nif (req.urgency_unrecognised) reasons.push('urgency: office sent unrecognised value \"' + req.urgency_unrecognised + '\", treated as expedited until a person confirms');\n\nif (out) {\n  if (out.patient_found !== true) reasons.push('agent could not confirm the patient');\n  if (out.coverage_active !== true) reasons.push('agent could not confirm active coverage');\n  if (out.pa_required === 'unknown') reasons.push('could not determine whether PA is required');\n  if (out.urgency_assessment !== req.requested_urgency) {\n    reasons.push('urgency: office asked ' + req.requested_urgency + ', agent assessed ' + out.urgency_assessment);\n  }\n\n  // A \"present\" item must name a recognisable source: a FHIR reference (ResourceType/id, relative\n  // or under the configured FHIR base URL, optionally followed by a note in brackets) or one of the\n  // document URLs on the request. The referenced id must also appear in what the agent's tools\n  // returned, so an invented reference fails. Free text fails.\n  const FHIR_TYPES = ['DocumentReference', 'Binary', 'Observation', 'DiagnosticReport', 'Condition', 'Procedure', 'ServiceRequest',\n    'Encounter', 'ImagingStudy', 'MedicationRequest', 'MedicationStatement', 'CarePlan', 'Composition', 'QuestionnaireResponse',\n    'Patient', 'Coverage', 'AllergyIntolerance', 'Immunization', 'Media'];\n  const base = String(cfg.fhir_base_url ?? '').replace(/\\/+$/, '');\n  const docUrls = new Set((req.documents ?? []).map((d) => String(d.url ?? '').trim()).filter(Boolean));\n  let seen = '';\n  try { seen = JSON.stringify(($('Prior-auth agent').item.json.intermediateSteps ?? []).map((st) => st.observation)); } catch (e) {}\n  const leadingRef = (s) => {\n    const m = /^([A-Za-z]+)\\/([A-Za-z0-9.-]{1,64})(\\/_history\\/[A-Za-z0-9.-]{1,64})?(?=$|\\s|\\()/.exec(s);\n    return m && FHIR_TYPES.includes(m[1]) ? m : null;\n  };\n  const recognisable = (src) => {\n    let s = String(src ?? '').trim();\n    if (!s) return false;\n    if (docUrls.has(s)) return true;\n    if (base && s.startsWith(base + '/')) s = s.slice(base.length + 1);\n    const m = leadingRef(s);\n    return !!m && seen.includes(m[2]);\n  };\n  const unsourced = packet.filter((p) => p?.status === 'present' && !recognisable(p.source));\n  if (unsourced.length) reasons.push(unsourced.length + ' packet items marked present without a recognisable FHIR reference or request document URL');\n\n  // Queue must agree with the packet and with the PA requirement.\n  if (out.route_queue === 'ready_for_submission_review') {\n    if (!packet.length) reasons.push('marked ready but the packet is empty');\n    else if (packet.some((p) => p?.status !== 'present')) reasons.push('marked ready but packet has missing or unclear items');\n  }\n  if (out.pa_required === 'no' && !['no_pa_required_confirm', 'clinical_review'].includes(out.route_queue)) {\n    reasons.push('PA not required but queued as ' + out.route_queue);\n  }\n  if (out.pa_required !== 'no' && out.route_queue === 'no_pa_required_confirm') {\n    reasons.push('queued as no PA required but pa_required is ' + out.pa_required);\n  }\n}\n\nconst ok = reasons.length === 0;\nreturn {\n  json: {\n    business_key: req.business_key,\n    route: ok ? 'auto' : 'escalate',\n    guardrail_reasons: reasons,\n    planned_actions: ok ? [{ action: 'worklist.insert', queue: out.route_queue, urgency: out.urgency_assessment }] : [],\n  },\n};"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2080,
+        2740,
         0
       ],
       "name": "Guardrails",
@@ -337,7 +415,7 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.3,
       "position": [
-        2300,
+        2960,
         0
       ],
       "name": "Route automatically?",
@@ -354,7 +432,7 @@
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.7,
       "position": [
-        2560,
+        3220,
         0
       ],
       "name": "Add to PA worklist",
@@ -372,7 +450,7 @@
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.7,
       "position": [
-        2780,
+        3440,
         0
       ],
       "name": "Read back worklist item",
@@ -388,7 +466,7 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        3000,
+        3660,
         0
       ],
       "name": "Verify worklist item",
@@ -423,7 +501,7 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.3,
       "position": [
-        3220,
+        3880,
         0
       ],
       "name": "Verified?",
@@ -458,7 +536,7 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.3,
       "position": [
-        3440,
+        4100,
         0
       ],
       "name": "Expedited?",
@@ -482,7 +560,7 @@
       "type": "n8n-nodes-base.slack",
       "typeVersion": 2.7,
       "position": [
-        3660,
+        4320,
         -140
       ],
       "name": "Alert UM nurses",
@@ -507,7 +585,7 @@
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.5,
       "position": [
-        3880,
+        4540,
         0
       ],
       "name": "Mark completed",
@@ -516,12 +594,12 @@
     {
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "// Collects everything a reviewer needs in one record: the request, what the agent\n// proposed, why the guardrails stopped it, and the tool calls behind it.\nconst intake = $('Normalize request').item.json;\nlet agent = null;\nlet guard = null;\ntry { agent = $('Prior-auth agent').item.json; } catch (e) {}\ntry { guard = $('Guardrails').item.json; } catch (e) {}\n\nconst reasons = [...(guard?.guardrail_reasons ?? [])];\nif ($json.error) reasons.push('system_error: ' + ($json.error.message ?? JSON.stringify($json.error)).slice(0, 300));\nif ($json.verify_failed) reasons.push('verification_failed: ' + $json.verify_detail);\nif ($json.handoff_reason) reasons.push($json.handoff_reason);\nif (!agent?.output && !reasons.length) reasons.push('agent_produced_no_valid_output');\nif (!reasons.length) {\n  const o = agent.output;\n  reasons.push('agent recommends review: ' + (o.decision ?? o.recommended_action ?? o.classification ?? o.route_to_queue ?? 'see proposal'));\n}\n\nconst trace = (agent?.intermediateSteps ?? []).map((s) => ({\n  tool: s.action?.tool,\n  input: s.action?.toolInput,\n  observation: String(s.observation ?? '').slice(0, 1500),\n}));\n\nreturn {\n  json: {\n    business_key: intake.business_key,\n    team: \"PA intake coordinators\",\n    reasons,\n    proposed: agent?.output ?? null,\n    confidence: agent?.output?.confidence ?? null,\n    questions: agent?.output?.questions_for_human ?? [],\n    trace,\n    summary: 'PA request ' + intake.request_id + ' · proposed queue: ' + (agent?.output?.route_queue ?? 'none') + ' · urgency: ' + (agent?.output?.urgency_assessment ?? intake.requested_urgency),\n  },\n};"
+        "jsCode": "// Collects everything a reviewer needs in one record: the request, what the agent\n// proposed, why the guardrails stopped it, and the tool calls behind it.\n// Every lookup is guarded: this node is the safety net, so it must never be the step that fails.\n// n8n links each item back to the request it came from. That link can break after the AI\n// Agent node (seen live), so fall back to the node's output when it holds exactly one item,\n// which cannot be ambiguous.\nconst one = (name) => { try { return $(name).item.json; } catch (e) { const all = $(name).all(); if (all.length === 1) return all[0].json; throw e; } };\nlet intake = null;\nlet agent = null;\nlet guard = null;\ntry { intake = one('Normalize request'); } catch (e) {}\ntry { agent = one('Prior-auth agent'); } catch (e) {}\ntry { guard = one('Guardrails'); } catch (e) {}\n\nconst reasons = [...(guard?.guardrail_reasons ?? [])];\nif (!intake) {\n  // n8n could not link this item back to its request. Keep whatever identifies it and say so.\n  intake = { business_key: $json.business_key ?? null };\n  reasons.push('item_context_lost: the request could not be linked to this failure; check the n8n execution');\n}\nif ($json.error) reasons.push('system_error: ' + ($json.error.message ?? JSON.stringify($json.error)).slice(0, 300));\nif ($json.verify_failed) reasons.push('verification_failed: ' + $json.verify_detail);\nif ($json.handoff_reason) reasons.push($json.handoff_reason);\nif (!agent?.output && !reasons.length) reasons.push('agent_produced_no_valid_output');\nif (!reasons.length) {\n  const o = agent.output;\n  reasons.push('agent recommends review: ' + (o.decision ?? o.recommended_action ?? o.classification ?? o.route_to_queue ?? 'see proposal'));\n}\n\nconst REDACT = [].map((p) => new RegExp(p, 'g'));\nconst scrub = (text) => REDACT.reduce((t, r) => t.replace(r, '[redacted]'), String(text ?? ''));\n// The masks also apply to what the model wrote, in case it repeated a number it read.\nconst scrubJson = (v) => {\n  if (!REDACT.length || v == null) return v;\n  try { return JSON.parse(scrub(JSON.stringify(v))); } catch (e) { return scrub(JSON.stringify(v)); }\n};\nconst trace = (agent?.intermediateSteps ?? []).map((s) => ({\n  tool: s.action?.tool,\n  input: s.action?.toolInput,\n  observation: scrub(s.observation).slice(0, 1500),\n}));\n\nconst summary = 'PA request ' + intake.request_id + ' · proposed queue: ' + (agent?.output?.route_queue ?? 'none') + ' · urgency: ' + (agent?.output?.urgency_assessment ?? intake.requested_urgency);\n// Slack-safe copies: request, document and model text can contain Slack markup such as <!channel>.\nconst esc = (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nreturn {\n  json: {\n    business_key: intake.business_key,\n    team: \"PA intake coordinators\",\n    reasons,\n    proposed: scrubJson(agent?.output ?? null),\n    confidence: agent?.output?.confidence ?? null,\n    questions: scrubJson(agent?.output?.questions_for_human ?? []),\n    trace,\n    summary,\n    slack: { key: esc(intake.business_key), summary: esc(summary), reasons: esc(reasons.join('; ')) },\n  },\n};"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2560,
+        3220,
         560
       ],
       "name": "Build exception",
@@ -538,7 +616,7 @@
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.7,
       "position": [
-        2800,
+        3460,
         560
       ],
       "name": "Queue exception",
@@ -554,7 +632,7 @@
           "value": "={{ $('Config').first().json.slack_channel_exceptions }}",
           "mode": "name"
         },
-        "text": "={{ ':large_orange_circle: *Healthcare · Prior-auth triage agent* needs a decision\\n' + 'Ref: ' + $('Build exception').item.json.business_key + ' · exception #' + $json.id + '\\n' + $('Build exception').item.json.summary + '\\n' + 'Why: ' + $('Build exception').item.json.reasons.join('; ') }}",
+        "text": "={{ ':large_orange_circle: *Healthcare · Prior-auth triage agent* needs a decision\\n' + 'Ref: ' + $('Build exception').item.json.slack.key + ' · exception #' + $json.id + '\\n' + $('Build exception').item.json.slack.summary + '\\n' + 'Why: ' + $('Build exception').item.json.slack.reasons }}",
         "otherOptions": {
           "includeLinkToWorkflow": false
         }
@@ -562,7 +640,7 @@
       "type": "n8n-nodes-base.slack",
       "typeVersion": 2.7,
       "position": [
-        3040,
+        3700,
         560
       ],
       "name": "Notify PA intake coordinators",
@@ -578,6 +656,12 @@
               "name": "outcome",
               "value": "escalated",
               "type": "string"
+            },
+            {
+              "id": "b303d456-02da-4d6a-aea8-f8be6e462bff",
+              "name": "business_key",
+              "value": "={{ $('Build exception').item.json.business_key }}",
+              "type": "string"
             }
           ]
         },
@@ -587,7 +671,7 @@
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.5,
       "position": [
-        3280,
+        3940,
         560
       ],
       "name": "Mark escalated",
@@ -596,12 +680,12 @@
     {
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "const intake = $('Normalize request').item.json;\nlet agent = null;\nlet guard = null;\nlet approval = null;\ntry { agent = $('Prior-auth agent').item.json; } catch (e) {}\ntry { guard = $('Guardrails').item.json; } catch (e) {}\n// Present only on workflows with a named-approver step, and only if this run reached it.\ntry { approval = $('Record approval').item.json; } catch (e) {}\n\nreturn {\n  json: {\n    business_key: intake.business_key,\n    outcome: $json.outcome,\n    approval: approval ? { decision: approval.decision, approver: approval.approver, decided_at: approval.decided_at } : null,\n    route: guard?.route ?? 'escalate',\n    decision: agent?.output ?? null,\n    guardrail_reasons: guard?.guardrail_reasons ?? [],\n    actions: guard?.planned_actions ?? [],\n    tool_calls: (agent?.intermediateSteps ?? []).length,\n  },\n};"
+        "jsCode": "// n8n links each item back to the request it came from. That link can break after the AI\n// Agent node (seen live), so fall back to the node's output when it holds exactly one item,\n// which cannot be ambiguous.\nconst one = (name) => { try { return $(name).item.json; } catch (e) { const all = $(name).all(); if (all.length === 1) return all[0].json; throw e; } };\nlet intake = null;\nlet agent = null;\nlet guard = null;\nlet approval = null;\ntry { intake = one('Normalize request'); } catch (e) {}\ntry { agent = one('Prior-auth agent'); } catch (e) {}\ntry { guard = one('Guardrails'); } catch (e) {}\n// Present only on workflows with a named-approver step, and only if this run reached it.\ntry { approval = one('Record approval'); } catch (e) {}\n\nreturn {\n  json: {\n    // Escalated runs carry the key from Build exception, so the audit row is written even if\n    // the request itself could not be looked up.\n    business_key: intake?.business_key ?? $json.business_key ?? null,\n    outcome: $json.outcome,\n    approval: approval ? { decision: approval.decision, approver: approval.approver, decided_at: approval.decided_at } : null,\n    route: guard?.route ?? 'escalate',\n    decision: agent?.output ?? null,\n    guardrail_reasons: guard?.guardrail_reasons ?? [],\n    actions: guard?.planned_actions ?? [],\n    tool_calls: (agent?.intermediateSteps ?? []).length,\n  },\n};"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        4140,
+        4800,
         280
       ],
       "name": "Build audit record",
@@ -618,7 +702,7 @@
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.7,
       "position": [
-        4380,
+        5040,
         280
       ],
       "name": "Write audit record",
@@ -626,9 +710,9 @@
     },
     {
       "parameters": {
-        "content": "## 1 · Intake\nThe EHR or scheduling system posts a PA request with patient, coverage, CPT and ICD-10 codes, urgency and attached document links.\nOnly identifiers and codes go into the prompt. The agent fetches clinical detail itself.",
+        "content": "## 1 · Intake\nThe EHR or scheduling system posts a PA request with patient, coverage, CPT and ICD-10 codes, urgency and attached document links.\nOnly identifiers and codes go into the prompt. The agent fetches clinical detail itself.\nA request missing its ids or CPT codes goes straight to hand-off. Urgency ignores case, and urgent, stat, emergent and asap count as expedited. An unrecognised urgency is treated as expedited and sent to a person to confirm.",
         "height": 453,
-        "width": 640,
+        "width": 860,
         "color": 7
       },
       "type": "n8n-nodes-base.stickyNote",
@@ -650,7 +734,7 @@
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
       "position": [
-        650,
+        870,
         -278
       ],
       "name": "Stage: observe and plan",
@@ -658,15 +742,15 @@
     },
     {
       "parameters": {
-        "content": "## 3 · Guardrails\nEscalate when the patient or coverage isn't found, PA need is unknown, the agent's urgency differs from the office's, a \"present\" item has no source, or a \"ready\" packet still has gaps.",
+        "content": "## 3 · Guardrails\nPatient and Coverage are **read again** from FHIR. Escalate when the patient isn't found, the coverage isn't active on the requested date, belongs to someone else or names a different payer, or PA need is unknown.\nAlso escalate when the agent's urgency differs from the office's, a \"present\" item lacks a FHIR reference or request document URL, a \"ready\" packet is empty or has gaps, or the queue contradicts the PA requirement.",
         "height": 453,
-        "width": 420,
+        "width": 860,
         "color": 3
       },
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
       "position": [
-        2030,
+        2250,
         -278
       ],
       "name": "Stage: guardrails",
@@ -682,7 +766,7 @@
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
       "position": [
-        2510,
+        3170,
         -278
       ],
       "name": "Stage: act and verify",
@@ -690,7 +774,7 @@
     },
     {
       "parameters": {
-        "content": "## 5 · Hand off\nAnything the guardrails stop, or any failed write, goes to a PA intake coordinator with the agent's checklist, its questions and its full tool trace.",
+        "content": "## 5 · Hand off\nAnything the guardrails stop, a malformed request, a failed FHIR re-read or any failed write goes to a PA intake coordinator with the agent's checklist, its questions and its full tool trace.",
         "height": 313,
         "width": 920,
         "color": 2
@@ -698,7 +782,7 @@
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
       "position": [
-        2510,
+        3170,
         422
       ],
       "name": "Stage: hand off",
@@ -714,7 +798,7 @@
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
       "position": [
-        4090,
+        4750,
         142
       ],
       "name": "Stage: audit",
@@ -776,11 +860,27 @@
         ]
       ]
     },
+    "Normalize request": {
+      "main": [
+        [
+          {
+            "node": "Request complete?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
     "Prior-auth agent · Claude": {
       "ai_languageModel": [
         [
           {
             "node": "Prior-auth agent",
+            "type": "ai_languageModel",
+            "index": 0
+          },
+          {
+            "node": "Prior-auth agent · output schema",
             "type": "ai_languageModel",
             "index": 0
           }
@@ -853,7 +953,7 @@
         ]
       ]
     },
-    "Normalize request": {
+    "Request complete?": {
       "main": [
         [
           {
@@ -861,10 +961,53 @@
             "type": "main",
             "index": 0
           }
+        ],
+        [
+          {
+            "node": "Build exception",
+            "type": "main",
+            "index": 0
+          }
         ]
       ]
     },
     "Prior-auth agent": {
+      "main": [
+        [
+          {
+            "node": "Re-read patient (FHIR)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build exception",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Re-read patient (FHIR)": {
+      "main": [
+        [
+          {
+            "node": "Re-read coverage (FHIR)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build exception",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Re-read coverage (FHIR)": {
       "main": [
         [
           {

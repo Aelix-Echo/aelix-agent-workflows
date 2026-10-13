@@ -70,6 +70,8 @@ This makes edits detectable, not impossible: a database superuser can disable th
 
 **Claude Opus 5** (`claude-opus-5`, set in `src/lib.mjs`) with adaptive thinking. Effort is high everywhere except Energy, which uses medium for high-volume triage. Prompt caching is on (5 minutes). Change the model on each workflow's `… · Claude` node, or in `MODEL_ID` and rebuild.
 
+**Why not Claude Opus 5.5 yet.** Opus 5.5 binds each thinking block to the exact conversation that produced it, and rejects a request (HTTP 400) if earlier messages have changed. That check is on by default for Anthropic API accounts created on or after 31 August 2026. n8n's AI Agent node (checked up to n8n 2.44.0) rewrites earlier history between tool rounds and cannot send the `prefix_mismatch_behavior` setting that relaxes the check, so multi-step runs fail intermittently. In the live end-to-end run, Opus 5.5 hit this on 1 of 4 FinTech cases; Opus 5 passed all four. Switch once n8n's Anthropic node supports it, and re-run `npm run test:e2e` before shipping the change.
+
 ## What each workflow will not do
 
 | Workflow | Always goes to a person |

@@ -1,6 +1,6 @@
 import {
   Workflow, COLOR, S, COMMON_OUTPUT, SYSTEM_TAIL, guardPreamble,
-  webhook, config, code, ifTrue, postgres, slack, setFields,
+  webhook, config, code, ifTrue, http, postgres, slack, setFields,
   agentBlock, handoffTail, auditTail, overviewStickies,
 } from '../lib.mjs';
 
@@ -24,34 +24,59 @@ export default function build() {
   wf.add(code(INTAKE, [440, 0], `
 // Only identifiers and codes travel into the prompt. Clinical detail is fetched
 // by the agent from the EHR, so nothing extra is copied around.
-const b = $json.body ?? $json;
-const missing = ['request_id', 'patient_id', 'coverage_id'].filter((k) => !b[k]);
-if (missing.length) throw new Error('Prior-auth request missing fields: ' + missing.join(', '));
-const svc = b.service ?? {};
-if (!Array.isArray(svc.cpt_codes) || !svc.cpt_codes.length) throw new Error('Prior-auth request has no CPT codes');
+// The webhook has already answered 202, so this node never throws: a malformed request
+// is marked invalid with a handoff_reason and routed to the hand-off, where a person sees it.
+const b = ($json.body && typeof $json.body === 'object' ? $json.body : $json) ?? {};
+const svc = b.service && typeof b.service === 'object' ? b.service : {};
+const problems = [];
+const missing = ['request_id', 'patient_id', 'coverage_id'].filter((k) => b[k] == null || String(b[k]).trim() === '');
+if (missing.length) problems.push('missing fields: ' + missing.join(', '));
+const cpt = Array.isArray(svc.cpt_codes) ? svc.cpt_codes.map((c) => String(c ?? '').trim()).filter(Boolean) : [];
+if (!cpt.length) problems.push('no CPT codes');
 
+// Urgency is never downgraded. Case and spacing are ignored, and known urgent synonyms
+// count as expedited. Missing or empty means the office did not ask for expedited review.
+// Any other value is treated as expedited (never lower) and the guardrails send the case
+// to a person to confirm, because guessing "standard" could delay an urgent patient.
+const URGENT = ['expedited', 'urgent', 'stat', 'emergent', 'emergency', 'asap', 'expedite'];
+const STANDARD = ['standard', 'routine', 'normal', 'non-urgent', 'nonurgent', 'elective'];
+const rawUrgency = b.urgency == null ? '' : String(b.urgency).trim().toLowerCase().replace(/[\\s_]+/g, ' ');
+let requested_urgency = 'standard';
+let urgency_unrecognised = null;
+if (URGENT.includes(rawUrgency)) requested_urgency = 'expedited';
+else if (rawUrgency && !STANDARD.includes(rawUrgency.replace(/ /g, '-'))) {
+  requested_urgency = 'expedited';
+  urgency_unrecognised = String(b.urgency).slice(0, 50);
+}
+
+const id = (k) => (b[k] == null ? '' : String(b[k]).trim());
 return {
   json: {
-    business_key: String(b.request_id),
-    request_id: String(b.request_id),
-    patient_id: String(b.patient_id),
-    coverage_id: String(b.coverage_id),
+    valid: problems.length === 0,
+    handoff_reason: problems.length ? 'intake_rejected: prior-auth request ' + problems.join('; ') : null,
+    business_key: id('request_id') || null,
+    request_id: id('request_id'),
+    patient_id: id('patient_id'),
+    coverage_id: id('coverage_id'),
     ordering_provider_npi: String(b.ordering_provider?.npi ?? ''),
-    cpt_codes: svc.cpt_codes.map(String),
-    icd10_codes: (svc.icd10_codes ?? []).map(String),
+    cpt_codes: cpt,
+    icd10_codes: (Array.isArray(svc.icd10_codes) ? svc.icd10_codes : []).map(String),
     service_description: String(svc.description ?? '').slice(0, 500),
     requested_date: svc.requested_date ?? null,
-    requested_urgency: b.urgency === 'expedited' ? 'expedited' : 'standard',
-    documents: (b.documents ?? []).map((d) => ({ type: String(d.type ?? 'unknown'), url: String(d.url ?? '') })),
+    requested_urgency,
+    urgency_unrecognised,
+    documents: (Array.isArray(b.documents) ? b.documents : []).filter((d) => d && typeof d === 'object')
+      .map((d) => ({ type: String(d.type ?? 'unknown'), url: String(d.url ?? '') })),
   },
 };
 `));
-  wf.chain('Prior-auth request received', 'Config', INTAKE);
+  wf.add(ifTrue('Request complete?', [660, 0], '={{ $json.valid }}'));
+  wf.chain('Prior-auth request received', 'Config', INTAKE, 'Request complete?');
 
   // ---------- observe & plan ----------
   const block = agentBlock(wf, {
     name: AGENT,
-    left: 700,
+    left: 920,
     prompt: `=Prior-authorization request {{ $json.request_id }}
 Patient id (FHIR): {{ $json.patient_id }}
 Coverage id (FHIR): {{ $json.coverage_id }}
@@ -137,7 +162,7 @@ ${SYSTEM_TAIL}`,
         item: S.str('What the payer expects, for example "PT notes covering 6 weeks of conservative treatment".'),
         required_by: S.str('Which payer criterion asks for it.'),
         status: S.enum(['present', 'missing', 'unclear'], 'Whether you found it.'),
-        source: S.str('FHIR reference or document URL where it was found, empty when missing.'),
+        source: S.str('Exactly one FHIR reference as a tool returned it, such as DocumentReference/123, or one document URL from the request. Nothing else in this field. Empty when missing.'),
       }), 'Packet checklist built from payer criteria.'),
       missing_items: S.arr(S.str(), 'Plain-language list of items still needed.'),
       urgency_assessment: S.enum(['standard', 'expedited'], 'Your urgency assessment.'),
@@ -147,24 +172,97 @@ ${SYSTEM_TAIL}`,
       ...COMMON_OUTPUT,
     }),
   });
-  wf.link(INTAKE, AGENT);
+  wf.link('Request complete?', AGENT, 0);
 
   // ---------- guardrails ----------
   const gx = block.right + 140;
-  wf.add(code(GUARD, [gx, 0], `
+  // Fresh reads of the Patient and Coverage the request names (same URLs as the agent's tools),
+  // so the guardrails never take the agent's word that they exist or are active.
+  const RP = 'Re-read patient (FHIR)';
+  const RC = 'Re-read coverage (FHIR)';
+  wf.add(http(RP, [gx, 0], {
+    url: `={{ ${cfg}.fhir_base_url }}/Patient/{{ encodeURIComponent($('${INTAKE}').item.json.patient_id) }}`,
+    auth: fhir,
+    errorOutput: true,
+  }));
+  wf.add(http(RC, [gx + 220, 0], {
+    url: `={{ ${cfg}.fhir_base_url }}/Coverage/{{ encodeURIComponent($('${INTAKE}').item.json.coverage_id) }}`,
+    auth: fhir,
+    errorOutput: true,
+  }));
+  wf.add(code(GUARD, [gx + 440, 0], `
 ${guardPreamble(AGENT)}
 const req = $('${INTAKE}').item.json;
+const patient = $('${RP}').item.json ?? {}; // fresh read, not what the agent saw
+const cov = $json ?? {};                         // fresh read of the Coverage
+const norm = (s) => String(s ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+const packet = Array.isArray(out?.packet) ? out.packet : [];
+
+// Patient and coverage, checked against the EHR rather than the agent's booleans.
+if (patient.resourceType !== 'Patient' || String(patient.id ?? '') !== req.patient_id) reasons.push('patient ' + req.patient_id + ' not found in the EHR');
+if (cov.resourceType !== 'Coverage' || String(cov.id ?? '') !== req.coverage_id) reasons.push('coverage ' + req.coverage_id + ' not found in the EHR');
+else {
+  if (cov.status !== 'active') reasons.push('coverage status is ' + (cov.status ?? 'missing') + ', not active');
+  const on = String(req.requested_date ?? new Date().toISOString()).slice(0, 10);
+  const start = cov.period?.start ? String(cov.period.start).slice(0, 10) : null;
+  const end = cov.period?.end ? String(cov.period.end).slice(0, 10) : null;
+  if ((start && on < start) || (end && on > end)) reasons.push('coverage period ' + (start ?? '?') + ' to ' + (end ?? '?') + ' does not include ' + on);
+  const beneficiary = String(cov.beneficiary?.reference ?? '').replace(/^.*Patient\\//, '');
+  if (beneficiary !== req.patient_id) reasons.push('coverage does not belong to patient ' + req.patient_id);
+  // Payer: the agent's payer must be one the Coverage names (display, payer id or Organization id).
+  const payers = (Array.isArray(cov.payor) ? cov.payor : []).flatMap((p) => [
+    p?.display, String(p?.display ?? '').replace(/\\s*\\([^)]*\\)\\s*$/, ''), p?.identifier?.value, String(p?.reference ?? '').replace(/^.*Organization\\//, ''),
+  ]).map(norm).filter(Boolean);
+  if (!payers.length) reasons.push('coverage names no payer');
+  else if (out && !payers.includes(norm(out.payer_name))) reasons.push('payer: agent said ' + (out.payer_name ?? 'none') + ', coverage does not name that payer');
+}
+
+if (req.urgency_unrecognised) reasons.push('urgency: office sent unrecognised value "' + req.urgency_unrecognised + '", treated as expedited until a person confirms');
+
 if (out) {
-  if (!out.patient_found) reasons.push('patient not found');
-  if (!out.coverage_active) reasons.push('coverage not active on requested date');
+  if (out.patient_found !== true) reasons.push('agent could not confirm the patient');
+  if (out.coverage_active !== true) reasons.push('agent could not confirm active coverage');
   if (out.pa_required === 'unknown') reasons.push('could not determine whether PA is required');
   if (out.urgency_assessment !== req.requested_urgency) {
     reasons.push('urgency: office asked ' + req.requested_urgency + ', agent assessed ' + out.urgency_assessment);
   }
-  const unsourced = (out.packet ?? []).filter((p) => p.status === 'present' && !p.source);
-  if (unsourced.length) reasons.push(unsourced.length + ' packet items marked present without a source');
-  if (out.route_queue === 'ready_for_submission_review' && (out.packet ?? []).some((p) => p.status !== 'present')) {
-    reasons.push('marked ready but packet has missing or unclear items');
+
+  // A "present" item must name a recognisable source: a FHIR reference (ResourceType/id, relative
+  // or under the configured FHIR base URL, optionally followed by a note in brackets) or one of the
+  // document URLs on the request. The referenced id must also appear in what the agent's tools
+  // returned, so an invented reference fails. Free text fails.
+  const FHIR_TYPES = ['DocumentReference', 'Binary', 'Observation', 'DiagnosticReport', 'Condition', 'Procedure', 'ServiceRequest',
+    'Encounter', 'ImagingStudy', 'MedicationRequest', 'MedicationStatement', 'CarePlan', 'Composition', 'QuestionnaireResponse',
+    'Patient', 'Coverage', 'AllergyIntolerance', 'Immunization', 'Media'];
+  const base = String(cfg.fhir_base_url ?? '').replace(/\\/+$/, '');
+  const docUrls = new Set((req.documents ?? []).map((d) => String(d.url ?? '').trim()).filter(Boolean));
+  let seen = '';
+  try { seen = JSON.stringify(($('${AGENT}').item.json.intermediateSteps ?? []).map((st) => st.observation)); } catch (e) {}
+  const leadingRef = (s) => {
+    const m = /^([A-Za-z]+)\\/([A-Za-z0-9.-]{1,64})(\\/_history\\/[A-Za-z0-9.-]{1,64})?(?=$|\\s|\\()/.exec(s);
+    return m && FHIR_TYPES.includes(m[1]) ? m : null;
+  };
+  const recognisable = (src) => {
+    let s = String(src ?? '').trim();
+    if (!s) return false;
+    if (docUrls.has(s)) return true;
+    if (base && s.startsWith(base + '/')) s = s.slice(base.length + 1);
+    const m = leadingRef(s);
+    return !!m && seen.includes(m[2]);
+  };
+  const unsourced = packet.filter((p) => p?.status === 'present' && !recognisable(p.source));
+  if (unsourced.length) reasons.push(unsourced.length + ' packet items marked present without a recognisable FHIR reference or request document URL');
+
+  // Queue must agree with the packet and with the PA requirement.
+  if (out.route_queue === 'ready_for_submission_review') {
+    if (!packet.length) reasons.push('marked ready but the packet is empty');
+    else if (packet.some((p) => p?.status !== 'present')) reasons.push('marked ready but packet has missing or unclear items');
+  }
+  if (out.pa_required === 'no' && !['no_pa_required_confirm', 'clinical_review'].includes(out.route_queue)) {
+    reasons.push('PA not required but queued as ' + out.route_queue);
+  }
+  if (out.pa_required !== 'no' && out.route_queue === 'no_pa_required_confirm') {
+    reasons.push('queued as no PA required but pa_required is ' + out.pa_required);
   }
 }
 
@@ -178,12 +276,11 @@ return {
   },
 };
 `));
-  wf.add(ifTrue('Route automatically?', [gx + 220, 0], `={{ $json.route === 'auto' }}`));
-  wf.link(AGENT, GUARD);
-  wf.link(GUARD, 'Route automatically?');
+  wf.add(ifTrue('Route automatically?', [gx + 660, 0], `={{ $json.route === 'auto' }}`));
+  wf.chain(AGENT, RP, RC, GUARD, 'Route automatically?');
 
   // ---------- act & verify ----------
-  const ax = gx + 480;
+  const ax = gx + 920;
   const o = `$('${AGENT}').item.json.output`;
   wf.add(postgres('Add to PA worklist', [ax, 0], `
 INSERT INTO pa_worklist (request_id, queue, urgency, payer_name, packet, missing_items, reviewer_summary, confidence, n8n_execution_id)
@@ -236,7 +333,10 @@ return {
     team: 'PA intake coordinators', channel: `={{ ${cfg}.slack_channel_exceptions }}`,
     summary: `'PA request ' + intake.request_id + ' · proposed queue: ' + (agent?.output?.route_queue ?? 'none') + ' · urgency: ' + (agent?.output?.urgency_assessment ?? intake.requested_urgency)`,
   });
-  wf.link(AGENT, h.first, 1);
+  wf.link('Request complete?', h.first, 1);   // malformed request: missing ids or CPT codes
+  wf.link(AGENT, h.first, 1);                 // agent failed
+  wf.link(RP, h.first, 1);                    // patient re-read failed (not found or EHR error)
+  wf.link(RC, h.first, 1);                    // coverage re-read failed (not found or EHR error)
   wf.link('Route automatically?', h.first, 1);
   wf.link('Add to PA worklist', h.first, 1);
   wf.link('Read back worklist item', h.first, 1);
@@ -248,19 +348,21 @@ return {
   wf.link(h.last, a.first);
 
   // ---------- stickies ----------
-  wf.group({ name: 'Stage: intake', title: '1 · Intake', color: COLOR.intake, nodes: ['Prior-auth request received', 'Config', INTAKE], body: `
+  wf.group({ name: 'Stage: intake', title: '1 · Intake', color: COLOR.intake, nodes: ['Prior-auth request received', 'Config', INTAKE, 'Request complete?'], body: `
 The EHR or scheduling system posts a PA request with patient, coverage, CPT and ICD-10 codes, urgency and attached document links.
-Only identifiers and codes go into the prompt. The agent fetches clinical detail itself.` });
+Only identifiers and codes go into the prompt. The agent fetches clinical detail itself.
+A request missing its ids or CPT codes goes straight to hand-off. Urgency ignores case, and urgent, stat, emergent and asap count as expedited. An unrecognised urgency is treated as expedited and sent to a person to confirm.` });
   wf.group({ name: 'Stage: observe and plan', title: '2 · Observe and plan (agent)', color: COLOR.plan, nodes: block.nodes, body: `
 Claude reads Patient, Coverage, Conditions and DocumentReferences over FHIR, pulls the payer's criteria per CPT code, and builds the packet checklist: present, missing or unclear, each with its source.
 It proposes a worklist queue and an urgency. **It never submits to a payer and never makes the medical-necessity call.**` });
-  wf.group({ name: 'Stage: guardrails', title: '3 · Guardrails', color: COLOR.guard, nodes: [GUARD, 'Route automatically?'], body: `
-Escalate when the patient or coverage isn't found, PA need is unknown, the agent's urgency differs from the office's, a "present" item has no source, or a "ready" packet still has gaps.` });
+  wf.group({ name: 'Stage: guardrails', title: '3 · Guardrails', color: COLOR.guard, nodes: [RP, RC, GUARD, 'Route automatically?'], body: `
+Patient and Coverage are **read again** from FHIR. Escalate when the patient isn't found, the coverage isn't active on the requested date, belongs to someone else or names a different payer, or PA need is unknown.
+Also escalate when the agent's urgency differs from the office's, a "present" item lacks a FHIR reference or request document URL, a "ready" packet is empty or has gaps, or the queue contradicts the PA requirement.` });
   wf.group({ name: 'Stage: act and verify', title: '4 · Packet assembly and routing', color: COLOR.act, nodes: ['Add to PA worklist', 'Read back worklist item', 'Verify worklist item', 'Verified?', 'Expedited?', 'Alert UM nurses', 'Mark completed'], body: `
 Upserts the packet into **pa_worklist** keyed on request id (safe to re-run), reads it back, checks queue and urgency.
 Expedited cases page the UM nurses. **Slack messages carry ids only, no PHI.**` });
   wf.group({ name: 'Stage: hand off', title: '5 · Hand off', color: COLOR.handoff, nodes: h.nodes, body: `
-Anything the guardrails stop, or any failed write, goes to a PA intake coordinator with the agent's checklist, its questions and its full tool trace.` });
+Anything the guardrails stop, a malformed request, a failed FHIR re-read or any failed write goes to a PA intake coordinator with the agent's checklist, its questions and its full tool trace.` });
   wf.group({ name: 'Stage: audit', title: '6 · Audit', color: COLOR.audit, nodes: a.nodes, body: `
 One **agent_runs** row per request: outcome, queue, guardrail reasons, tool-call count, model, execution id.` });
   wf.alignTops(['Stage: intake', 'Stage: observe and plan', 'Stage: guardrails', 'Stage: act and verify']);

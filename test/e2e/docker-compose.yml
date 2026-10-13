@@ -1,0 +1,56 @@
+# Local end-to-end stack: real n8n, real Postgres, real Claude (through a logging proxy),
+# and a mock server standing in for Stripe, Salesforce, Slack, Gmail and the gateway APIs.
+# Started and stopped by test/e2e/run.mjs; see docs/testing.md.
+#
+# Host ports are deliberately NOT n8n's default 5678, so this disposable stack (wiped on every run)
+# can never be mistaken for, or collide with, a real n8n on the same machine.
+
+name: aelix-e2e
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: aelix
+      POSTGRES_USER: aelix
+      POSTGRES_PASSWORD: aelix
+    volumes:
+      - ../../sql/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "aelix", "-d", "aelix"]
+      interval: 2s
+      retries: 30
+
+  mock:
+    image: node:24-alpine
+    working_dir: /e2e
+    command: ["node", "mock-server.mjs"]
+    volumes:
+      - ./:/e2e:ro
+    ports:
+      - "${E2E_MOCK_PORT:-14010}:4010"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:4010/_health"]
+      interval: 2s
+      retries: 30
+
+  n8n:
+    image: n8nio/n8n:2.40.7
+    environment:
+      N8N_ENCRYPTION_KEY: e2e-only-not-a-secret
+      N8N_SSRF_ALLOWED_HOSTNAMES: mock
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_PERSONALIZATION_ENABLED: "false"
+      GENERIC_TIMEZONE: UTC
+      WEBHOOK_URL: http://localhost:${E2E_N8N_PORT:-15678}/
+    volumes:
+      - ./.out:/e2e-out:ro
+    ports:
+      - "${E2E_N8N_PORT:-15678}:5678"
+    depends_on:
+      postgres: { condition: service_healthy }
+      mock: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:5678/healthz || exit 1"]
+      interval: 3s
+      retries: 60

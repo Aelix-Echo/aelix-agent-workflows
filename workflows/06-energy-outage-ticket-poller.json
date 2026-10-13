@@ -1,0 +1,280 @@
+{
+  "id": "Hqa2pYHz7uKGBS7G",
+  "name": "Energy & Utilities · Outage ticket poller",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 2
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        0,
+        0
+      ],
+      "name": "Every 2 minutes",
+      "id": "d1274a9f-bede-4f71-a162-98e10a55ce0b"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "94ebb788-3d4a-44c1-a444-ffc6eeb4cce8",
+              "name": "ops_gateway_url",
+              "value": "https://ops-gateway.YOUR-UTILITY.example/api",
+              "type": "string"
+            },
+            {
+              "id": "331ec209-69ed-4200-ad05-48454e351088",
+              "name": "batch_size",
+              "value": 25,
+              "type": "number"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        220,
+        0
+      ],
+      "name": "Config",
+      "id": "e81d829e-b545-402c-a145-f14ff560ddd6"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Config').first().json.ops_gateway_url }}/tickets",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "status",
+              "value": "new"
+            },
+            {
+              "name": "category",
+              "value": "outage"
+            },
+            {
+              "name": "limit",
+              "value": "={{ $('Config').first().json.batch_size }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        440,
+        0
+      ],
+      "name": "Fetch new outage tickets",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "id": "50345949-d820-44ed-aee2-9ddc16724977"
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "tickets",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        660,
+        0
+      ],
+      "name": "One item per ticket",
+      "id": "2398dc72-b040-4978-a569-9f8e6a7a1fda"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "6a455421-e627-45fd-afbf-65b1b3158b47",
+              "name": "ops_gateway_url",
+              "value": "={{ $('Config').first().json.ops_gateway_url }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        880,
+        0
+      ],
+      "name": "Attach gateway URL",
+      "id": "eb6935e8-220a-4614-aa2b-4dea9455b5d1"
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "6Kk5bvbemTX0fmJG",
+          "mode": "id",
+          "cachedResultName": "Energy & Utilities · Outage ticket triage agent"
+        },
+        "mode": "each",
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1100,
+        0
+      ],
+      "name": "Triage each ticket",
+      "id": "c3224a87-9a85-4580-a897-a300be0ade43"
+    },
+    {
+      "parameters": {
+        "content": "## 1 · Poll and fan out\nEvery two minutes, new outage tickets are fetched and **each one is triaged in its own execution** of *Outage ticket triage agent*, so the agent always works on exactly one ticket. Claiming happens there, so overlapping polls cannot process a ticket twice.",
+        "height": 313,
+        "width": 1300,
+        "color": 7
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -50,
+        -138
+      ],
+      "name": "Stage: poll",
+      "id": "402bca94-aeab-4327-af09-1e2f88601bd4"
+    },
+    {
+      "parameters": {
+        "content": "## Energy & Utilities · Outage ticket poller\n**Job:** find new outage tickets and hand each one to *Energy & Utilities · Outage ticket triage agent*, one execution per ticket.\n\n**Why separate:** one ticket per agent run keeps each triage independent: a failure on one ticket never affects another, and the agent can never mix two tickets' data.",
+        "height": 194,
+        "width": 620,
+        "color": 5
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -1000,
+        -420
+      ],
+      "name": "Overview",
+      "id": "15a7b80f-e83f-40c6-acf8-acad3807d5f0"
+    },
+    {
+      "parameters": {
+        "content": "## Setup\n1. Import this workflow and *Energy & Utilities · Outage ticket triage agent*.\n2. Credential: **Header Auth** for the ops gateway on *Fetch new outage tickets*.\n3. Edit **Config**: gateway URL and batch size. The URL is passed to each triage run.\n4. Activate this workflow only.",
+        "height": 182,
+        "width": 620,
+        "color": 1
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -1000,
+        -186
+      ],
+      "name": "Setup",
+      "id": "2852628d-8f88-4816-adfa-35ce580703d1"
+    }
+  ],
+  "connections": {
+    "Every 2 minutes": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Fetch new outage tickets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch new outage tickets": {
+      "main": [
+        [
+          {
+            "node": "One item per ticket",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "One item per ticket": {
+      "main": [
+        [
+          {
+            "node": "Attach gateway URL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Attach gateway URL": {
+      "main": [
+        [
+          {
+            "node": "Triage each ticket",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataSuccessExecution": "all",
+    "saveDataErrorExecution": "all",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "tags": [],
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "active": false
+}

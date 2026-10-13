@@ -141,7 +141,7 @@ return { json: { business_key: req.business_key, route: ok ? 'draft' : 'escalate
   }[mode];
   guardNodes.push(wf.add(code(GUARD, [x, 0], `
 ${guardPreamble(AGENT)}
-const req = $('${INTAKE}').item.json;
+const req = one('${INTAKE}'); // one(): defined by guardPreamble; survives a lost item link
 ${spec.guard.trim()}
 ${finish.trim()}
 `)));
@@ -209,7 +209,9 @@ return {
     wf.add(http(R, [x + GAP, 0], { auth: { kind: 'header' }, ...a.readBack, errorOutput: true }));
     wf.add(code('Verify', [x + 2 * GAP, 0], `
 // Done only when the system of record shows what was planned.
-const planned = $('${GUARD}').item.json.action;
+// Read the plan even if n8n lost the item link (seen live after the AI Agent node).
+const one = (name) => { try { return $(name).item.json; } catch (e) { const all = $(name).all(); if (all.length === 1) return all[0].json; throw e; } };
+const planned = one('${GUARD}').action;
 ${a.verify.trim()}
 return { json: { verified: ok, verify_failed: !ok, verify_detail: ok ? '' : detail } };
 `));

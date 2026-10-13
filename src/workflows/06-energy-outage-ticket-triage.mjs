@@ -4,14 +4,56 @@ import {
   agentBlock, handoffTail, auditTail, overviewStickies,
 } from '../lib.mjs';
 
-// Words that mean a person, not a model, looks at the ticket first.
-const HAZARD_TERMS = [
-  'wire down', 'wires down', 'line down', 'lines down', 'downed', 'sparking', 'sparks', 'arcing', 'fire', 'smoke',
-  'burning', 'explosion', 'gas smell', 'smell gas', 'pole down', 'pole broken', 'tree on line', 'tree on the line',
-  'shock', 'electrocut', 'injur', 'hurt', 'trapped', 'life support', 'oxygen', 'ventilator', 'dialysis',
+// Phrases that mean a person, not a model, looks at the ticket first. Regex sources, matched
+// case-insensitively on whole words against the full description, so "fired" or "spark plug
+// shop" style false hits are rarer and "line on the ground" style reports are caught.
+const HAZARD_PATTERNS = [
+  '\\b(?:wires?|lines?|cables?|power ?lines?) (?:is |are )?down\\b', '\\bdowned\\b',
+  '\\b(?:wires?|lines?|cables?) (?:(?:is|are) )?(?:lying |hanging )?(?:on|across|over) the (?:ground|road|street|yard|car|house|roof|sidewalk|pavement)\\b',
+  '\\blive wires?\\b', '\\bspark(?:s|ing|ed)?\\b', '\\barcing\\b', '\\bfire\\b', '\\bon fire\\b', '\\bsmoke\\b', '\\bsmoking\\b',
+  '\\bburning\\b', '\\bexplo(?:sion|ded|de|ding)\\b', '\\bgas (?:smell|leak)\\b', '\\bsmell(?:s|ing)? (?:of )?gas\\b',
+  '\\bpoles? (?:is |are )?(?:down|broken|snapped|leaning)\\b', '\\btree (?:is )?(?:on|against|across|through) (?:the )?(?:power ?)?lines?\\b',
+  '\\btransformer (?:blew|exploded|is on fire|is smoking|is sparking)\\b',
+  '\\bshock(?:ed)?\\b', '\\belectrocut', '\\binjur', '\\bhurt\\b', '\\btrapped\\b',
+  '\\blife support\\b', '\\boxygen\\b', '\\bventilator\\b', '\\bdialysis\\b',
 ];
 
+const execTrigger = (name, position) => ({
+  parameters: { inputSource: 'passthrough' },
+  type: 'n8n-nodes-base.executeWorkflowTrigger',
+  typeVersion: 1.1,
+  position,
+  name,
+});
+
+// One sub-workflow execution per ticket, not waiting: each ticket is triaged on its own.
+const executeEach = (name, position, workflowId, cachedResultName) => ({
+  parameters: {
+    source: 'database',
+    workflowId: { __rl: true, value: workflowId, mode: 'id', cachedResultName },
+    mode: 'each',
+    workflowInputs: { mappingMode: 'defineBelow', value: {}, matchingColumns: [], schema: [], attemptToConvertTypes: false, convertFieldsToString: true },
+    options: { waitForSubWorkflow: false },
+  },
+  type: 'n8n-nodes-base.executeWorkflow',
+  typeVersion: 1.2,
+  position,
+  name,
+});
+
 export default function build() {
+  const triage = buildTriage();
+  return [triage, buildPoller(triage)];
+}
+
+// ---------------------------------------------------------------------------------------------
+// Per-ticket triage. Called once per ticket by the poller, so the agent always handles exactly
+// one item. (Run live in a batch, n8n 2.40's AI Agent node re-rendered later tool rounds against
+// the wrong ticket; one ticket per execution removes that class of problem.) Because there is
+// exactly one item, earlier nodes are read with .first(), which does not depend on n8n's item
+// linking (also seen to break after the agent node).
+// ---------------------------------------------------------------------------------------------
+function buildTriage() {
   const wf = new Workflow('Energy & Utilities · Outage ticket triage agent', 'energy-outage-ticket-triage');
   const AGENT = 'Outage triage agent';
   const INTAKE = 'Normalize ticket';
@@ -20,21 +62,15 @@ export default function build() {
   const ops = { kind: 'header' };
 
   // ---------- intake ----------
-  wf.add(schedule('Every 2 minutes', [0, 0], 2));
+  wf.add(execTrigger('Ticket from poller', [0, 0]));
   wf.add(config('Config', [220, 0], {
-    ops_gateway_url: 'https://ops-gateway.YOUR-UTILITY.example/api',
-    batch_size: 25,
+    ops_gateway_url: '={{ $json.ops_gateway_url }}',
     min_confidence: 0.85,
     slack_channel: '#dispatch-desk',
   }));
-  wf.add(http('Fetch new outage tickets', [440, 0], {
-    url: `={{ ${cfg}.ops_gateway_url }}/tickets`,
-    auth: ops,
-    query: { status: 'new', category: 'outage', limit: `={{ ${cfg}.batch_size }}` },
-  }));
-  wf.add(splitOut('One item per ticket', [660, 0], 'tickets'));
-  wf.add(code(INTAKE, [880, 0], `
+  wf.add(code(INTAKE, [440, 0], `
 const t = $json;
+const description = String(t.description ?? '');
 return {
   json: {
     business_key: String(t.ticket_id),
@@ -46,50 +82,57 @@ return {
     lon: t.lon ?? null,
     reported_at: t.reported_at ?? null,
     channel: String(t.channel ?? ''),
-    description: String(t.description ?? '').slice(0, 1500),
+    description: description.slice(0, 1500),     // what the model sees
+    description_full: description.slice(0, 20000), // what the safety screen reads
   },
 };
 `));
-  wf.add(http('Claim ticket', [1100, 0], {
+  wf.add(http('Claim ticket', [660, 0], {
     method: 'PATCH',
     url: `={{ ${cfg}.ops_gateway_url }}/tickets/{{ $json.ticket_id }}`,
     auth: ops,
     json: `={{ JSON.stringify({ status: 'triaging', triaged_by: 'aelix-outage-agent', expected_status: 'new' }) }}`,
     errorOutput: true,
   }));
-  wf.add(code('Safety screen', [1320, 0], `
+  wf.add(ifTrue('Claimed by another run?', [880, 260],
+    `={{ ['409', 409].includes($json.error?.httpCode) || /\\b409\\b|conflict/i.test(String($json.error?.message ?? '') + ' ' + String($json.error?.description ?? '')) }}`));
+  wf.add({ parameters: {}, type: 'n8n-nodes-base.noOp', typeVersion: 1, position: [1100, 260], name: 'Skip: already claimed' });
+  wf.add(code('Safety screen', [880, 0], `
 // Deterministic, runs before the model. Anything that sounds like a hazard or a
-// medically dependent customer goes straight to a dispatcher.
-const TERMS = ${JSON.stringify(HAZARD_TERMS)};
-const t = $('${INTAKE}').item.json;
-const text = t.description.toLowerCase();
-const hits = TERMS.filter((w) => text.includes(w));
+// medically dependent customer goes straight to a dispatcher. Reads the full description.
+const PATTERNS = ${JSON.stringify(HAZARD_PATTERNS)}.map((p) => new RegExp(p, 'i'));
+const t = $('${INTAKE}').first().json;
+const text = t.description_full ?? t.description ?? '';
+const hits = PATTERNS.map((r) => text.match(r)?.[0]).filter(Boolean);
 return {
   json: {
+    ...t,
     hazard: hits.length > 0,
     hazard_terms: hits,
     handoff_reason: hits.length ? 'SAFETY: customer report mentions ' + hits.join(', ') : '',
   },
 };
 `));
-  wf.add(ifTrue('Hazard reported?', [1540, 0], '={{ $json.hazard }}'));
-  wf.chain('Every 2 minutes', 'Config', 'Fetch new outage tickets', 'One item per ticket', INTAKE, 'Claim ticket');
+  wf.add(ifTrue('Hazard reported?', [1100, 0], '={{ $json.hazard }}'));
+  wf.chain('Ticket from poller', 'Config', INTAKE, 'Claim ticket');
   wf.link('Claim ticket', 'Safety screen', 0);
+  wf.link('Claim ticket', 'Claimed by another run?', 1);
+  wf.link('Claimed by another run?', 'Skip: already claimed', 0);
   wf.link('Safety screen', 'Hazard reported?');
 
   // ---------- observe & plan ----------
   const block = agentBlock(wf, {
     name: AGENT,
-    left: 1780,
+    left: 1340,
     effort: 'medium',
-    prompt: `=Outage ticket {{ $('${INTAKE}').item.json.ticket_id }}
-Premise: {{ $('${INTAKE}').item.json.premise_id }} · meter {{ $('${INTAKE}').item.json.meter_id }}
-Address: {{ $('${INTAKE}').item.json.address }} ({{ $('${INTAKE}').item.json.lat }}, {{ $('${INTAKE}').item.json.lon }})
-Reported: {{ $('${INTAKE}').item.json.reported_at }} via {{ $('${INTAKE}').item.json.channel }}
+    prompt: `=Outage ticket {{ $('${INTAKE}').first().json.ticket_id }}
+Premise: {{ $('${INTAKE}').first().json.premise_id }} · meter {{ $('${INTAKE}').first().json.meter_id }}
+Address: {{ $('${INTAKE}').first().json.address }} ({{ $('${INTAKE}').first().json.lat }}, {{ $('${INTAKE}').first().json.lon }})
+Reported: {{ $('${INTAKE}').first().json.reported_at }} via {{ $('${INTAKE}').first().json.channel }}
 
 Customer's description, as written by the customer:
 <customer_report>
-{{ $('${INTAKE}').item.json.description }}
+{{ $('${INTAKE}').first().json.description }}
 </customer_report>
 
 Correlate this ticket with what the network shows, and recommend how it should be handled.`,
@@ -174,20 +217,47 @@ ${SYSTEM_TAIL}`,
   wf.link('Hazard reported?', AGENT, 1);
 
   // ---------- guardrails ----------
+  // Only "part of a known outage" can be automated. Everything the decision rests on is read
+  // again from the systems of record: the outage (OMS), the premise's upstream network (GIS)
+  // and the customer flags (CIS). The agent's own feeder and critical-customer answers are
+  // never the only evidence.
   const gx = block.right + 140;
+  const premise = `$('${INTAKE}').first().json.premise_id`;
   wf.add(ifTrue('Matches a known outage?', [gx, 0], `={{ $json.output?.classification === 'part_of_known_outage' && !!$json.output?.matched_outage_id }}`));
   wf.add(http('Re-read outage (OMS)', [gx + 220, 0], {
-    url: `={{ ${cfg}.ops_gateway_url }}/oms/outages/{{ $('${AGENT}').item.json.output.matched_outage_id }}`,
+    url: `={{ ${cfg}.ops_gateway_url }}/oms/outages/{{ $('${AGENT}').first().json.output.matched_outage_id }}`,
     auth: ops,
     errorOutput: true,
   }));
-  wf.add(code(GUARD, [gx + 440, 0], `
+  wf.add(http('Re-read network (GIS)', [gx + 440, 0], {
+    url: `={{ ${cfg}.ops_gateway_url }}/gis/premises/{{ ${premise} }}/upstream`,
+    auth: ops,
+    errorOutput: true,
+  }));
+  wf.add(http('Re-read premise flags (CIS)', [gx + 660, 0], {
+    url: `={{ ${cfg}.ops_gateway_url }}/cis/premises/{{ ${premise} }}/flags`,
+    auth: ops,
+    errorOutput: true,
+  }));
+  wf.add(code(GUARD, [gx + 880, 0], `
 ${guardPreamble(AGENT)}
-const t = $('${INTAKE}').item.json;
-const outage = $json; // fresh OMS read
+const t = $('${INTAKE}').first().json;
+const outage = $('Re-read outage (OMS)').first().json;
+const net = $('Re-read network (GIS)').first().json;
+const flags = $json; // fresh CIS read
+const upstream = [
+  net.service_transformer?.id,
+  ...(net.protective_devices ?? []).map((d) => d.id),
+  net.feeder?.id,
+  net.feeder?.breaker_id,
+].filter(Boolean);
 
 if (!['active', 'assessing', 'crew_assigned', 'crew_on_site'].includes(outage.status)) reasons.push('outage ' + outage.outage_id + ' is ' + outage.status);
-if (out?.premise_feeder_id && outage.feeder_id && out.premise_feeder_id !== outage.feeder_id) reasons.push('premise feeder ' + out.premise_feeder_id + ' differs from outage feeder ' + outage.feeder_id);
+if (!net.feeder?.id) reasons.push('network trace returned no feeder for premise ' + t.premise_id);
+else if (outage.feeder_id && net.feeder.id !== outage.feeder_id) reasons.push('premise feeder ' + net.feeder.id + ' differs from outage feeder ' + outage.feeder_id);
+if (!outage.device_id || !upstream.includes(outage.device_id)) reasons.push('premise ' + t.premise_id + ' is not downstream of outage device ' + (outage.device_id ?? 'unknown') + ' on the network trace');
+if (typeof flags.medical_baseline !== 'boolean' || typeof flags.life_support_registered !== 'boolean') reasons.push('customer flags unavailable for premise ' + t.premise_id);
+if (flags.medical_baseline || flags.life_support_registered || flags.critical_facility_type) reasons.push('critical customer on record (CIS): dispatcher confirms');
 if (out?.critical_customer) reasons.push('critical customer: dispatcher confirms');
 if (out?.priority === 'P1') reasons.push('P1: dispatcher confirms');
 
@@ -203,28 +273,28 @@ return {
   },
 };
 `));
-  wf.add(ifTrue('Link automatically?', [gx + 660, 0], `={{ $json.route === 'auto' }}`));
+  wf.add(ifTrue('Link automatically?', [gx + 1100, 0], `={{ $json.route === 'auto' }}`));
   wf.link(AGENT, 'Matches a known outage?');
+  wf.chain('Re-read outage (OMS)', 'Re-read network (GIS)', 'Re-read premise flags (CIS)', GUARD, 'Link automatically?');
   wf.link('Matches a known outage?', 'Re-read outage (OMS)', 0);
-  wf.link('Re-read outage (OMS)', GUARD, 0);
-  wf.link(GUARD, 'Link automatically?');
 
   // ---------- act & verify ----------
-  const ax = gx + 920;
+  const ax = gx + 1360;
   wf.add(http('Link ticket to outage', [ax, 0], {
     method: 'PATCH',
-    url: `={{ ${cfg}.ops_gateway_url }}/tickets/{{ $('${INTAKE}').item.json.ticket_id }}`,
+    url: `={{ ${cfg}.ops_gateway_url }}/tickets/{{ $('${INTAKE}').first().json.ticket_id }}`,
     auth: ops,
-    json: `={{ JSON.stringify({ status: 'linked', outage_id: $json.outage_id, triage_note: 'Linked by aelix-outage-agent: ' + $('${AGENT}').item.json.output.ami_evidence }) }}`,
+    // expected_status: a dispatcher who changed the ticket during triage is never overwritten.
+    json: `={{ JSON.stringify({ status: 'linked', expected_status: 'triaging', outage_id: $json.outage_id, triage_note: 'Linked by aelix-outage-agent: ' + $('${AGENT}').first().json.output.ami_evidence }) }}`,
     errorOutput: true,
   }));
   wf.add(http('Read back ticket', [ax + 220, 0], {
-    url: `={{ ${cfg}.ops_gateway_url }}/tickets/{{ $('${INTAKE}').item.json.ticket_id }}`,
+    url: `={{ ${cfg}.ops_gateway_url }}/tickets/{{ $('${INTAKE}').first().json.ticket_id }}`,
     auth: ops,
     errorOutput: true,
   }));
   wf.add(code('Verify link', [ax + 440, 0], `
-const planned = $('${GUARD}').item.json.outage_id;
+const planned = $('${GUARD}').first().json.outage_id;
 const ok = $json.status === 'linked' && $json.outage_id === planned;
 return {
   json: {
@@ -239,8 +309,9 @@ return {
     method: 'POST',
     url: `={{ ${cfg}.ops_gateway_url }}/notifications`,
     auth: ops,
-    headers: { 'Idempotency-Key': `=etr-{{ $('${INTAKE}').item.json.ticket_id }}` },
-    json: `={{ JSON.stringify({ template: 'outage_known_etr', premise_id: $('${INTAKE}').item.json.premise_id, outage_id: $('${GUARD}').item.json.outage_id, ticket_id: $('${INTAKE}').item.json.ticket_id }) }}`,
+    headers: { 'Idempotency-Key': `=etr-{{ $('${INTAKE}').first().json.ticket_id }}` },
+    json: `={{ JSON.stringify({ template: 'outage_known_etr', premise_id: $('${INTAKE}').first().json.premise_id, outage_id: $('${GUARD}').first().json.outage_id, ticket_id: $('${INTAKE}').first().json.ticket_id }) }}`,
+    errorOutput: true,
   }));
   wf.add(setFields('Mark completed', [ax + 1100, 0], { outcome: 'completed' }));
   wf.link('Link automatically?', 'Link ticket to outage', 0);
@@ -248,8 +319,7 @@ return {
   wf.link('Read back ticket', 'Verify link', 0);
   wf.link('Verify link', 'Verified?');
   wf.link('Verified?', 'Send ETR notice', 0);
-  wf.link('Send ETR notice', 'Mark completed');
-  wf.node('Send ETR notice').onError = 'continueRegularOutput';
+  wf.link('Send ETR notice', 'Mark completed', 0);
 
   // ---------- hand off ----------
   const h = handoffTail(wf, {
@@ -257,15 +327,18 @@ return {
     team: 'dispatch desk', channel: `={{ ${cfg}.slack_channel }}`,
     summary: `(($json.hazard) ? ':warning: HAZARD · ' : '') + 'Ticket ' + intake.ticket_id + ' · ' + intake.address + ' · ' + (agent?.output?.classification ?? 'not triaged') + ' · ' + (agent?.output?.priority ?? 'P1') + (agent?.output?.recommended_crew_id ? ' · suggested crew ' + agent.output.recommended_crew_id : '')`,
   });
-  wf.link('Claim ticket', h.first, 1);
+  wf.link('Claimed by another run?', h.first, 1); // claim failed for another reason
   wf.link('Hazard reported?', h.first, 0);
   wf.link(AGENT, h.first, 1);
   wf.link('Matches a known outage?', h.first, 1);
   wf.link('Re-read outage (OMS)', h.first, 1);
+  wf.link('Re-read network (GIS)', h.first, 1);
+  wf.link('Re-read premise flags (CIS)', h.first, 1);
   wf.link('Link automatically?', h.first, 1);
   wf.link('Link ticket to outage', h.first, 1);
   wf.link('Read back ticket', h.first, 1);
   wf.link('Verified?', h.first, 1);
+  wf.link('Send ETR notice', h.first, 1); // linked, but the customer was not told
 
   // ---------- audit ----------
   const a = auditTail(wf, { x: ax + 1360, y: 300, agentName: AGENT, intakeName: INTAKE, guardName: GUARD });
@@ -273,16 +346,16 @@ return {
   wf.link(h.last, a.first);
 
   // ---------- stickies ----------
-  wf.group({ name: 'Stage: intake', title: '1 · Intake and safety screen', color: COLOR.intake, nodes: ['Every 2 minutes', 'Config', 'Fetch new outage tickets', 'One item per ticket', INTAKE, 'Claim ticket', 'Safety screen', 'Hazard reported?'], body: `
-Every two minutes, new outage tickets are pulled and **claimed** (status new → triaging) so the next poll can't pick them up twice.
-A **keyword safety screen runs before the model**: wires down, sparking, fire, gas, injuries, life support. Any hit goes straight to a dispatcher.` });
+  wf.group({ name: 'Stage: intake', title: '1 · Claim and safety screen', color: COLOR.intake, nodes: ['Ticket from poller', 'Config', INTAKE, 'Claim ticket', 'Safety screen', 'Hazard reported?', 'Claimed by another run?', 'Skip: already claimed'], body: `
+The poller starts this workflow once per ticket. The ticket is **claimed** (status new → triaging); a ticket another run already claimed is skipped quietly.
+A **safety screen runs before the model** on the full description: wires down, sparking, fire, gas, injuries, life support. Any hit goes straight to a dispatcher.` });
   wf.group({ name: 'Stage: observe and plan', title: '2 · Correlate (agent)', color: COLOR.plan, nodes: block.nodes, body: `
 Claude checks active outages, the premise meter (last gasp, ping), the upstream network trace and critical-customer flags. It classifies the ticket, names the likely device, sets a priority and suggests a crew.
 Effort is **medium** here: high volume, well-bounded reasoning.` });
-  wf.group({ name: 'Stage: guardrails', title: '3 · Guardrails', color: COLOR.guard, nodes: ['Matches a known outage?', 'Re-read outage (OMS)', GUARD, 'Link automatically?'], body: `
-Only "part of a known outage" can be automated. The outage is **re-read** from OMS: it must still be open and on the same feeder. Critical customers and P1s always go to a dispatcher.` });
+  wf.group({ name: 'Stage: guardrails', title: '3 · Guardrails', color: COLOR.guard, nodes: ['Matches a known outage?', 'Re-read outage (OMS)', 'Re-read network (GIS)', 'Re-read premise flags (CIS)', GUARD, 'Link automatically?'], body: `
+Only "part of a known outage" can be automated. The outage, the premise's **network trace** and its **customer flags** are re-read: the outage must still be open, its device must be upstream of the premise, and no critical or medically dependent customer may be on record. P1s always go to a dispatcher.` });
   wf.group({ name: 'Stage: act and verify', title: '4 · Link and notify', color: COLOR.act, nodes: ['Link ticket to outage', 'Read back ticket', 'Verify link', 'Verified?', 'Send ETR notice', 'Mark completed'], body: `
-Links the ticket to the outage, reads it back, then sends the customer the **templated ETR notice** from your notification service (idempotent per ticket).` });
+Links the ticket to the outage (only if it is still in triage), reads it back, then sends the customer the **templated ETR notice** (idempotent per ticket). A notice that fails goes to the dispatch desk.` });
   wf.group({ name: 'Stage: hand off', title: '5 · Dispatch desk', color: COLOR.handoff, nodes: h.nodes, body: `
 Hazards, new outages, single-premise issues and anything stopped land here with classification, suspected device, priority, suggested crew and the tool trace. **A dispatcher makes every crew decision.**` });
   wf.group({ name: 'Stage: audit', title: '6 · Audit', color: COLOR.audit, nodes: a.nodes, body: `
@@ -294,7 +367,7 @@ One **agent_runs** row per ticket.` });
     overview: `## Energy & Utilities · Outage ticket triage agent
 **Job:** take outage-ticket triage off the dispatch desk. Correlate each ticket with OMS, AMI and the network model, attach tickets to known outages automatically, and hand dispatchers a prepared recommendation for everything else.
 
-**Flow:** poll and claim → safety screen (no model) → agent correlates (read-only) → guardrails re-read OMS → link, read back, send ETR → dispatch desk for the rest → audit.
+**Flow:** started per ticket by the *Outage ticket poller* → claim → safety screen (no model) → agent correlates (read-only) → guardrails re-read OMS, GIS and CIS → link, read back, send ETR → dispatch desk for the rest → audit.
 
 **Never does**
 - Dispatches a crew
@@ -305,11 +378,50 @@ One **agent_runs** row per ticket.` });
     setup: `## Setup
 1. Run **sql/schema.sql**. Select the Postgres credential on *Queue exception* and *Write audit record*.
 2. Credentials: **Anthropic**, **Header Auth** for the ops gateway, **Slack**.
-3. **Ops gateway contract**: tickets (list, patch, get), oms/outages, ami/meters, gis/premises upstream, cis/premises flags, wfm/crews, notifications. Map to your OMS/ADMS (Oracle NMS, GE ADMS), head-end, GIS and CIS.
-4. *Claim ticket* must fail if the ticket is no longer **new** (expected_status). That is what stops double processing.
-5. Edit **Config**: gateway URL, batch size, confidence floor, channel. Review the hazard terms in *Safety screen* with your safety team.
-6. Test with *Execute workflow* against a staging gateway; sample response in **samples/energy-tickets-response.json**.`,
+3. Import this workflow **and** *Energy & Utilities · Outage ticket poller*. Activate only the poller; it starts this one for each ticket and passes the gateway URL from its Config.
+4. **Ops gateway contract**: tickets (list, patch, get), oms/outages, ami/meters, gis/premises upstream, cis/premises flags, wfm/crews, notifications. Map to your OMS/ADMS (Oracle NMS, GE ADMS), head-end, GIS and CIS.
+5. *Claim ticket* and *Link ticket to outage* must fail (409) if the ticket is not in the expected status. That is what stops double processing.
+6. Edit **Config**: confidence floor, channel. Review the hazard patterns in *Safety screen* with your safety team.`,
   });
 
+  return wf;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Poller: fetch new outage tickets and start one triage execution per ticket.
+// ---------------------------------------------------------------------------------------------
+function buildPoller(triage) {
+  const wf = new Workflow('Energy & Utilities · Outage ticket poller', 'energy-outage-ticket-poller');
+  const cfg = `$('Config').first().json`;
+  wf.add(schedule('Every 2 minutes', [0, 0], 2));
+  wf.add(config('Config', [220, 0], {
+    ops_gateway_url: 'https://ops-gateway.YOUR-UTILITY.example/api',
+    batch_size: 25,
+  }));
+  wf.add(http('Fetch new outage tickets', [440, 0], {
+    url: `={{ ${cfg}.ops_gateway_url }}/tickets`,
+    auth: { kind: 'header' },
+    query: { status: 'new', category: 'outage', limit: `={{ ${cfg}.batch_size }}` },
+  }));
+  wf.add(splitOut('One item per ticket', [660, 0], 'tickets'));
+  wf.add(setFields('Attach gateway URL', [880, 0], { ops_gateway_url: `={{ ${cfg}.ops_gateway_url }}` }, true));
+  wf.add(executeEach('Triage each ticket', [1100, 0], triage.id, triage.name));
+  wf.chain('Every 2 minutes', 'Config', 'Fetch new outage tickets', 'One item per ticket', 'Attach gateway URL', 'Triage each ticket');
+
+  wf.group({ name: 'Stage: poll', title: '1 · Poll and fan out', color: COLOR.intake, nodes: ['Every 2 minutes', 'Config', 'Fetch new outage tickets', 'One item per ticket', 'Attach gateway URL', 'Triage each ticket'], body: `
+Every two minutes, new outage tickets are fetched and **each one is triaged in its own execution** of *Outage ticket triage agent*, so the agent always works on exactly one ticket. Claiming happens there, so overlapping polls cannot process a ticket twice.` });
+
+  overviewStickies(wf, {
+    x: -1000,
+    overview: `## Energy & Utilities · Outage ticket poller
+**Job:** find new outage tickets and hand each one to *Energy & Utilities · Outage ticket triage agent*, one execution per ticket.
+
+**Why separate:** one ticket per agent run keeps each triage independent: a failure on one ticket never affects another, and the agent can never mix two tickets' data.`,
+    setup: `## Setup
+1. Import this workflow and *Energy & Utilities · Outage ticket triage agent*.
+2. Credential: **Header Auth** for the ops gateway on *Fetch new outage tickets*.
+3. Edit **Config**: gateway URL and batch size. The URL is passed to each triage run.
+4. Activate this workflow only.`,
+  });
   return wf;
 }

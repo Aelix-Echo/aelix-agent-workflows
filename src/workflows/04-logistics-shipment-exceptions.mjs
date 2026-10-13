@@ -132,24 +132,81 @@ ${SYSTEM_TAIL}`,
     auth: tms,
     errorOutput: true,
   }));
-  wf.add(code(GUARD, [gx + 220, 0], `
+  // The quotes the TMS issues for this shipment, read by the workflow itself. The cost and ETA
+  // checks use these, never the figures the agent reported.
+  wf.add(http('Re-read quotes (TMS)', [gx + 220, 0], {
+    method: 'POST',
+    url: `={{ ${cfg}.tms_base_url }}/shipments/{{ $('${INTAKE}').item.json.shipment_id }}/quotes`,
+    auth: tms,
+    json: `={{ JSON.stringify({ deliver_by: $json.promised_delivery ?? null }) }}`,
+    errorOutput: true,
+  }));
+  wf.add(code(GUARD, [gx + 440, 0], `
 ${guardPreamble(AGENT)}
 const req = $('${INTAKE}').item.json;
-const shp = $json; // fresh read
+const shp = $('Re-read shipment (TMS)').item.json; // fresh read of the shipment
+const issued = $json; // fresh read of the quotes the TMS issues for it
 const pick = (out?.options ?? []).find((o) => o.option_id === out?.recommended_option_id) ?? null;
-const promised = Date.parse(shp.promised_delivery ?? out?.promised_delivery ?? '');
+const promised = Date.parse(shp.promised_delivery ?? ''); // TMS only, never the agent's value
+const tmsEta = Date.parse(shp.eta ?? '');
+const agentEta = Date.parse(pick?.eta ?? '');
+const email = String(shp.customer?.email ?? '').trim();
+const iso = (t) => (Number.isFinite(t) ? new Date(t).toISOString() : null);
 
 if (out?.recommend_escalate) reasons.push('agent recommends a person handles it');
 if (['damage', 'customs_hold', 'address_issue'].includes(out?.root_cause)) reasons.push('root cause ' + out.root_cause + ' always goes to a person');
-if (['DAMAGED', 'CUSTOMS_HOLD', 'HAZMAT', 'ADDRESS_ISSUE'].includes(req.event_code)) reasons.push('event code ' + req.event_code + ' always goes to a person');
+// Event codes vary by carrier (DAMAGE, DAMAGED, CUSTOMS, CUSTOMS_HOLD, hazmat...), so match by stem.
+const code = String(req.event_code ?? '').toUpperCase().replace(/[^A-Z0-9]+/g, '_');
+if ([/DAMAG/, /CUSTOM/, /HAZ/, /DANGEROUS/, /ADDRESS/].some((r) => r.test(code))) reasons.push('event code ' + req.event_code + ' always goes to a person');
+// Hazmat comes from the TMS record. A missing flag is treated as unknown, and unknown goes to a person.
+const haz = shp.hazmat;
+if (haz === undefined || haz === null || haz === '') reasons.push('TMS shipment has no hazmat flag');
+else if (!(haz === false || haz === 0 || /^(false|no|n|0)$/i.test(String(haz)))) reasons.push('TMS shipment is flagged hazmat');
+if (String(shp.shipment_id ?? '') !== String(req.shipment_id ?? '')) reasons.push('TMS returned a different shipment');
 if (!pick) reasons.push('no recommended option');
 if (shp.status === 'delivered' || shp.status === 'cancelled') reasons.push('shipment is now ' + shp.status);
-if (pick && pick.type !== 'wait') {
+if (!Number.isFinite(promised)) reasons.push('TMS shipment has no valid promised delivery date');
+if (!/^[^\\s@<>,;]+@[^\\s@<>,;]+\\.[^\\s@<>,;]+$/.test(email)) reasons.push('TMS shipment has no usable customer email, so nobody would be told');
+if (pick && !Number.isFinite(agentEta)) reasons.push('option ETA is not a valid date');
+
+let quote = null;
+let costDelta = null;
+if (pick && pick.type === 'wait') {
+  // The carrier's own ETA, from the TMS, must meet the promise. The agent's estimate must too.
+  if (!Number.isFinite(tmsEta)) reasons.push('TMS shipment has no valid current ETA');
+  else if (Number.isFinite(promised) && tmsEta > promised) reasons.push('wait: the carrier ETA in the TMS (' + shp.eta + ') misses the promised date');
+  if (Number.isFinite(agentEta) && Number.isFinite(promised) && agentEta > promised) reasons.push('wait: the agent ETA misses the promised date');
+} else if (pick) {
   if (!pick.quote_id) reasons.push('rebook/expedite without a quote id');
-  if (pick.cost_delta > cfg.max_rebook_cost_delta) reasons.push('cost delta ' + pick.cost_delta + ' above ' + cfg.max_rebook_cost_delta);
-  if (Number.isFinite(promised) && Date.parse(pick.eta) > promised) reasons.push('paid option still misses the promised date');
+  else {
+    if (String(issued.shipment_id ?? '') !== String(req.shipment_id ?? '')) reasons.push('TMS quotes are for a different shipment');
+    quote = (Array.isArray(issued.quotes) ? issued.quotes : []).find((q) => q && String(q.quote_id) === String(pick.quote_id)) ?? null;
+    if (!quote) reasons.push('quote ' + pick.quote_id + ' is not among the quotes the TMS issues for this shipment');
+  }
+  if (quote) {
+    if (quote.type != null && quote.type !== pick.type) reasons.push('TMS quote is a ' + quote.type + ', not a ' + pick.type);
+    if (typeof quote.carrier !== 'string' || !quote.carrier.trim()) reasons.push('TMS quote has no carrier');
+    // Cost: the TMS cost delta, cross-checked against quote cost minus the current booking cost. The larger counts.
+    const deltas = [Number(quote.cost_delta ?? NaN)];
+    const base = Number(shp.current_booking?.cost ?? NaN);
+    if (quote.cost != null && Number.isFinite(base)) deltas.push(Number(quote.cost) - base);
+    costDelta = deltas.every(Number.isFinite) ? Math.max(...deltas) : null;
+    if (costDelta === null) reasons.push('TMS quote has no usable cost delta');
+    else if (costDelta > cfg.max_rebook_cost_delta) reasons.push('TMS cost delta ' + costDelta + ' above ' + cfg.max_rebook_cost_delta);
+    if (costDelta !== null && !(Math.abs(Number(pick.cost_delta) - costDelta) <= 1)) reasons.push('agent reported cost delta ' + pick.cost_delta + ' but the TMS quote says ' + costDelta);
+    if (quote.currency && shp.currency && quote.currency !== shp.currency) reasons.push('TMS quote currency ' + quote.currency + ' differs from the shipment currency ' + shp.currency);
+    if (quote.valid_until != null && !(Date.parse(quote.valid_until) > Date.now())) reasons.push('TMS quote has expired');
+    const quoteEta = Date.parse(quote.eta ?? '');
+    if (!Number.isFinite(quoteEta)) reasons.push('TMS quote ETA is not a valid date');
+    else if (Number.isFinite(promised) && quoteEta > promised) reasons.push('paid option still misses the promised date (TMS quote ETA ' + quote.eta + ')');
+  }
 }
-if (pick && Number.isNaN(Date.parse(pick.eta))) reasons.push('option ETA is not a valid date');
+
+// The plan carries TMS values only. A wait writes the later of the carrier ETA and the agent's estimate.
+const plan = !pick ? null : pick.type === 'wait'
+  ? { type: 'wait', quote_id: null, new_eta: iso(Math.max(tmsEta, agentEta)), carrier: shp.current_booking?.carrier ?? shp.carrier ?? null, booking_quote_id: shp.current_booking?.quote_id ?? null }
+  : { type: pick.type, quote_id: pick.quote_id ?? null, new_eta: quote ? iso(Date.parse(quote.eta ?? '')) : null, carrier: quote?.carrier ?? null, service: quote?.service ?? null, cost_delta: costDelta };
+if (plan && !plan.new_eta && !reasons.length) reasons.push('no valid ETA to plan with');
 
 const ok = reasons.length === 0;
 return {
@@ -157,19 +214,20 @@ return {
     business_key: req.business_key,
     route: ok ? 'auto' : 'escalate',
     guardrail_reasons: reasons,
-    plan: pick ? { type: pick.type, quote_id: pick.quote_id, new_eta: pick.eta, carrier: pick.carrier } : null,
-    customer_email: shp.customer?.email ?? null,
-    planned_actions: ok ? [{ action: pick.type === 'wait' ? 'tms.update_eta' : 'tms.rebook', quote_id: pick.quote_id, eta: pick.eta }] : [],
+    plan,
+    customer_email: email || null,
+    planned_actions: ok ? [{ action: plan.type === 'wait' ? 'tms.update_eta' : 'tms.rebook', quote_id: plan.quote_id, eta: plan.new_eta, carrier: plan.carrier, cost_delta: plan.type === 'wait' ? 0 : plan.cost_delta }] : [],
   },
 };
 `));
-  wf.add(ifTrue('Auto re-plan?', [gx + 440, 0], `={{ $json.route === 'auto' }}`));
+  wf.add(ifTrue('Auto re-plan?', [gx + 660, 0], `={{ $json.route === 'auto' }}`));
   wf.link(AGENT, 'Re-read shipment (TMS)');
-  wf.link('Re-read shipment (TMS)', GUARD, 0);
+  wf.link('Re-read shipment (TMS)', 'Re-read quotes (TMS)', 0);
+  wf.link('Re-read quotes (TMS)', GUARD, 0);
   wf.link(GUARD, 'Auto re-plan?');
 
   // ---------- act & verify ----------
-  const ax = gx + 700;
+  const ax = gx + 920;
   const plan = `$('${GUARD}').item.json.plan`;
   wf.add(ifTrue('Rebooking needed?', [ax, 0], `={{ $json.plan.type !== 'wait' }}`));
   wf.add(http('Book alternative (TMS)', [ax + 220, -130], {
@@ -193,17 +251,34 @@ return {
     errorOutput: true,
   }));
   wf.add(code('Verify re-plan', [ax + 660, 0], `
+// The read-back must match the plan built from TMS values. The customer notice then uses the
+// carrier and ETA from this read-back, never text the agent wrote.
 const plan = ${plan};
 const s = $json;
-const sameTime = (a, b) => Math.abs(Date.parse(a) - Date.parse(b)) < 60 * 1000;
-const ok = plan.type === 'wait'
-  ? sameTime(s.eta, plan.new_eta)
-  : s.current_booking?.quote_id === plan.quote_id;
+const booking = s.current_booking ?? {};
+const sameTime = (a, b) => {
+  const x = Date.parse(a ?? '');
+  const y = Date.parse(b ?? '');
+  return Number.isFinite(x) && Number.isFinite(y) && Math.abs(x - y) < 60 * 1000;
+};
+const clean = (t) => String(t ?? '').replace(/\\s+/g, ' ').trim().slice(0, 80);
+const misses = [];
+if (!sameTime(s.eta, plan.new_eta)) misses.push('ETA ' + plan.new_eta);
+if (plan.type === 'wait') {
+  if (plan.booking_quote_id != null && booking.quote_id !== plan.booking_quote_id) misses.push('unchanged booking ' + plan.booking_quote_id);
+} else {
+  if (booking.quote_id !== plan.quote_id) misses.push('booking ' + plan.quote_id);
+  if (!clean(booking.carrier) || booking.carrier !== plan.carrier) misses.push('carrier ' + plan.carrier);
+}
+const ok = misses.length === 0;
 return {
   json: {
     verified: ok,
     verify_failed: !ok,
-    verify_detail: ok ? '' : 'TMS does not show the planned ' + (plan.type === 'wait' ? 'ETA' : 'booking'),
+    verify_detail: ok ? '' : 'TMS does not show the planned ' + misses.join(', '),
+    notice_type: plan.type,
+    notice_eta: ok ? new Date(Date.parse(s.eta)).toISOString() : null,
+    notice_carrier: ok ? clean(booking.carrier) : null,
   },
 };
 `));
@@ -213,7 +288,7 @@ return {
     subject: `=Update on your shipment {{ $('${INTAKE}').item.json.tracking_number }}`,
     message: `=Hello,
 
-Your shipment {{ $('${INTAKE}').item.json.tracking_number }} ran into a delay in transit. It is now expected to arrive on {{ new Date(${plan}.new_eta).toUTCString().slice(0, 16) }}.{{ ${plan}.type !== 'wait' ? ' We have moved it to ' + ${plan}.carrier + ' to keep it on schedule, at no cost to you.' : '' }}
+Your shipment {{ $('${INTAKE}').item.json.tracking_number }} ran into a delay in transit. It is now expected to arrive on {{ new Date($('Verify re-plan').item.json.notice_eta).toUTCString().slice(0, 16) }}.{{ $('Verify re-plan').item.json.notice_type !== 'wait' ? ' We have moved it to ' + $('Verify re-plan').item.json.notice_carrier + ' to keep it on schedule, at no cost to you.' : '' }}
 
 We will let you know if anything changes. Reply to this email if you need to talk to someone.`,
   }));
@@ -236,6 +311,7 @@ We will let you know if anything changes. Reply to this email if you need to tal
   });
   wf.link(AGENT, h.first, 1);
   wf.link('Re-read shipment (TMS)', h.first, 1);
+  wf.link('Re-read quotes (TMS)', h.first, 1);
   wf.link('Auto re-plan?', h.first, 1);
   wf.link('Book alternative (TMS)', h.first, 1);
   wf.link('Update ETA (TMS)', h.first, 1);
@@ -253,10 +329,11 @@ Your visibility platform or carrier integration posts exception events (delay, m
   wf.group({ name: 'Stage: observe and plan', title: '2 · Trace and re-plan (agent)', color: COLOR.plan, nodes: block.nodes, body: `
 Claude reads the shipment, tracking history and SLA, names the root cause, estimates a new ETA, and when the promise is at risk gets **quotes** (quoting books nothing).
 It recommends wait, rebook or expedite, and drafts the customer notice.` });
-  wf.group({ name: 'Stage: guardrails', title: '3 · Guardrails', color: COLOR.guard, nodes: ['Re-read shipment (TMS)', GUARD, 'Auto re-plan?'], body: `
-Shipment is **re-read**. Damage, customs, hazmat and address issues always go to a person. A paid option needs a quote id, a cost under the limit, and an ETA that recovers the promise.` });
+  wf.group({ name: 'Stage: guardrails', title: '3 · Guardrails', color: COLOR.guard, nodes: ['Re-read shipment (TMS)', 'Re-read quotes (TMS)', GUARD, 'Auto re-plan?'], body: `
+The shipment and its quotes are **re-read** from the TMS. Damage, customs, hazmat (event code or TMS flag) and address issues always go to a person, as does a shipment with no promised date or no customer email.
+A paid option needs a quote the TMS issued, with a TMS cost under the limit and a TMS ETA that recovers the promise. A wait needs a carrier ETA in the TMS that meets the promise.` });
   wf.group({ name: 'Stage: act and verify', title: '4 · Act and verify', color: COLOR.act, nodes: ['Rebooking needed?', 'Book alternative (TMS)', 'Update ETA (TMS)', 'Read back shipment (TMS)', 'Verify re-plan', 'Verified?', 'Notify customer', 'Mark completed'], body: `
-Rebooks on the quoted option (idempotent), or just updates the ETA. The TMS is read back and must show the planned booking or ETA before the customer gets the **templated** notice.` });
+Rebooks on the quoted option (idempotent), or just updates the ETA. The TMS is read back and must show the planned booking, carrier and ETA before the customer gets the **templated** notice, filled from that read-back.` });
   wf.group({ name: 'Stage: hand off', title: '5 · Escalate', color: COLOR.handoff, nodes: h.nodes, body: `
 Ops gets the root cause, the options with quotes, the drafted customer notice and the tool trace. They pick an option or open a claim.` });
   wf.group({ name: 'Stage: audit', title: '6 · Audit', color: COLOR.audit, nodes: a.nodes, body: `
@@ -272,13 +349,14 @@ One **agent_runs** row per carrier event.` });
 **Never does**
 - Books above the cost limit, or an option that still misses the promise
 - Handles damage, customs, hazmat or address problems
+- Re-plans when nobody can be told (no customer email in the TMS)
 - Sends model-written text to customers
 
 **Model:** Claude Opus 5, adaptive thinking, effort high.`,
     setup: `## Setup
 1. Run **sql/schema.sql**. Select the Postgres credential on *Queue exception* and *Write audit record*.
 2. Credentials: **Anthropic**, **Header Auth** for the TMS API, **Gmail**, **Slack**.
-3. **TMS endpoints are a gateway contract**: shipments, events, order, quotes, rebook. Map them to your TMS (Oracle OTM, Blue Yonder, MercuryGate, e2open) or to project44 / FourKites for tracking.
+3. **TMS endpoints are a gateway contract**: shipments, events, order, quotes, rebook. The shipment record must carry promised_delivery, eta, hazmat, current_booking and customer.email; quotes must return the issued quote ids. Map them to your TMS (Oracle OTM, Blue Yonder, MercuryGate, e2open) or to project44 / FourKites for tracking.
 4. Edit **Config**: TMS URL, cost limit, confidence floor, channel.
 5. Test: \`curl -X POST <test webhook URL> -H 'Content-Type: application/json' -d @samples/logistics-shipment-exception.json\``,
   });

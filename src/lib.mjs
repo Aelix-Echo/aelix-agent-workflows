@@ -95,10 +95,15 @@ export class Workflow {
     }
   }
 
+  // Stable id: re-importing updates this workflow instead of duplicating it, and a parent
+  // workflow can reference a sub-workflow by it.
+  get id() {
+    return crypto.createHash('sha1').update(this.slug).digest('base64').replace(/[^A-Za-z0-9]/g, '').slice(0, 16);
+  }
+
   toJSON() {
     return {
-      // Stable id: re-importing updates this workflow instead of duplicating it.
-      id: crypto.createHash('sha1').update(this.slug).digest('base64').replace(/[^A-Za-z0-9]/g, '').slice(0, 16),
+      id: this.id,
       name: this.name,
       nodes: this.nodes,
       connections: this.connections,
@@ -173,7 +178,8 @@ export function schedule(name, position, minutes) {
 // Config is a Set node that keeps the incoming payload and adds tunables.
 // Downstream nodes read it with $('Config').first().json.<key>.
 export function config(name, position, values) {
-  const typeOf = (v) => (typeof v === 'number' ? 'number' : typeof v === 'boolean' ? 'boolean' : typeof v === 'object' ? 'object' : 'string');
+  // n8n's Set node rejects an array under type 'object', so lists need 'array'.
+  const typeOf = (v) => (typeof v === 'number' ? 'number' : typeof v === 'boolean' ? 'boolean' : Array.isArray(v) ? 'array' : typeof v === 'object' ? 'object' : 'string');
   return {
     parameters: {
       assignments: {
@@ -434,14 +440,18 @@ export function agentBlock(wf, { name, left, y = 0, prompt, system, schema, tool
     wf.link(toolName, name, 0, 'ai_tool');
   });
 
+  // Auto-fix: if Claude's final answer does not parse against the schema, the parser sends the
+  // error back to the same model once to repair it, instead of failing the run. Seen live on
+  // the larger schemas (Energy, Real Estate) as an occasional malformed JSON string.
   wf.add({
-    parameters: { schemaType: 'manual', inputSchema: JSON.stringify(schema, null, 2) },
+    parameters: { schemaType: 'manual', inputSchema: JSON.stringify(schema, null, 2), autoFix: true },
     type: '@n8n/n8n-nodes-langchain.outputParserStructured',
     typeVersion: 1.3,
     position: [startX + step * (tools.length + 1), row],
     name: parserName,
   });
   wf.link(parserName, name, 0, 'ai_outputParser');
+  wf.link(modelName, parserName, 0, 'ai_languageModel');
 
   return { agent: name, nodes: [name, modelName, ...tools.map((t) => t.name), parserName], right: left + rowWidth };
 }
@@ -485,7 +495,8 @@ How to work:
 
 // Hand-off: build the exception with the full reasoning trace, queue it, notify the owning team.
 // Inputs can arrive from any stage (agent error, guardrail, failed write, failed verify).
-export function handoffTail(wf, { x, y, agentName, intakeName, guardName, team, channel, summary }) {
+// `redact`: regex sources whose matches are masked in the stored tool-call trace.
+export function handoffTail(wf, { x, y, agentName, intakeName, guardName, team, channel, summary, redact = [] }) {
   wf.add(
     code(
       'Build exception',
@@ -493,13 +504,24 @@ export function handoffTail(wf, { x, y, agentName, intakeName, guardName, team, 
       `
 // Collects everything a reviewer needs in one record: the request, what the agent
 // proposed, why the guardrails stopped it, and the tool calls behind it.
-const intake = $('${intakeName}').item.json;
+// Every lookup is guarded: this node is the safety net, so it must never be the step that fails.
+// n8n links each item back to the request it came from. That link can break after the AI
+// Agent node (seen live), so fall back to the node's output when it holds exactly one item,
+// which cannot be ambiguous.
+const one = (name) => { try { return $(name).item.json; } catch (e) { const all = $(name).all(); if (all.length === 1) return all[0].json; throw e; } };
+let intake = null;
 let agent = null;
 let guard = null;
-try { agent = $('${agentName}').item.json; } catch (e) {}
-try { guard = $('${guardName}').item.json; } catch (e) {}
+try { intake = one('${intakeName}'); } catch (e) {}
+try { agent = one('${agentName}'); } catch (e) {}
+try { guard = one('${guardName}'); } catch (e) {}
 
 const reasons = [...(guard?.guardrail_reasons ?? [])];
+if (!intake) {
+  // n8n could not link this item back to its request. Keep whatever identifies it and say so.
+  intake = { business_key: $json.business_key ?? null };
+  reasons.push('item_context_lost: the request could not be linked to this failure; check the n8n execution');
+}
 if ($json.error) reasons.push('system_error: ' + ($json.error.message ?? JSON.stringify($json.error)).slice(0, 300));
 if ($json.verify_failed) reasons.push('verification_failed: ' + $json.verify_detail);
 if ($json.handoff_reason) reasons.push($json.handoff_reason);
@@ -509,22 +531,33 @@ if (!reasons.length) {
   reasons.push('agent recommends review: ' + (o.decision ?? o.recommended_action ?? o.classification ?? o.route_to_queue ?? 'see proposal'));
 }
 
+const REDACT = ${JSON.stringify(redact)}.map((p) => new RegExp(p, 'g'));
+const scrub = (text) => REDACT.reduce((t, r) => t.replace(r, '[redacted]'), String(text ?? ''));
+// The masks also apply to what the model wrote, in case it repeated a number it read.
+const scrubJson = (v) => {
+  if (!REDACT.length || v == null) return v;
+  try { return JSON.parse(scrub(JSON.stringify(v))); } catch (e) { return scrub(JSON.stringify(v)); }
+};
 const trace = (agent?.intermediateSteps ?? []).map((s) => ({
   tool: s.action?.tool,
   input: s.action?.toolInput,
-  observation: String(s.observation ?? '').slice(0, 1500),
+  observation: scrub(s.observation).slice(0, 1500),
 }));
 
+const summary = ${summary};
+// Slack-safe copies: request, document and model text can contain Slack markup such as <!channel>.
+const esc = (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 return {
   json: {
     business_key: intake.business_key,
     team: ${JSON.stringify(team)},
     reasons,
-    proposed: agent?.output ?? null,
+    proposed: scrubJson(agent?.output ?? null),
     confidence: agent?.output?.confidence ?? null,
-    questions: agent?.output?.questions_for_human ?? [],
+    questions: scrubJson(agent?.output?.questions_for_human ?? []),
     trace,
-    summary: ${summary},
+    summary,
+    slack: { key: esc(intake.business_key), summary: esc(summary), reasons: esc(reasons.join('; ')) },
   },
 };
 `,
@@ -546,10 +579,10 @@ RETURNING id;`,
       `Notify ${team}`,
       [x + 480, y],
       channel,
-      `={{ ':large_orange_circle: *${wf.name}* needs a decision\\n' + 'Ref: ' + $('Build exception').item.json.business_key + ' · exception #' + $json.id + '\\n' + $('Build exception').item.json.summary + '\\n' + 'Why: ' + $('Build exception').item.json.reasons.join('; ') }}`,
+      `={{ ':large_orange_circle: *${wf.name}* needs a decision\\n' + 'Ref: ' + $('Build exception').item.json.slack.key + ' · exception #' + $json.id + '\\n' + $('Build exception').item.json.slack.summary + '\\n' + 'Why: ' + $('Build exception').item.json.slack.reasons }}`,
     ),
   );
-  wf.add(setFields('Mark escalated', [x + 720, y], { outcome: 'escalated' }));
+  wf.add(setFields('Mark escalated', [x + 720, y], { outcome: 'escalated', business_key: "={{ $('Build exception').item.json.business_key }}" }));
   wf.chain('Build exception', 'Queue exception', `Notify ${team}`, 'Mark escalated');
   return { first: 'Build exception', last: 'Mark escalated', nodes: ['Build exception', 'Queue exception', `Notify ${team}`, 'Mark escalated'] };
 }
@@ -561,15 +594,22 @@ export function auditTail(wf, { x, y, agentName, intakeName, guardName }) {
       'Build audit record',
       [x, y],
       `
-const intake = $('${intakeName}').item.json;
+// n8n links each item back to the request it came from. That link can break after the AI
+// Agent node (seen live), so fall back to the node's output when it holds exactly one item,
+// which cannot be ambiguous.
+const one = (name) => { try { return $(name).item.json; } catch (e) { const all = $(name).all(); if (all.length === 1) return all[0].json; throw e; } };
+let intake = null;
 let agent = null;
 let guard = null;
-try { agent = $('${agentName}').item.json; } catch (e) {}
-try { guard = $('${guardName}').item.json; } catch (e) {}
+try { intake = one('${intakeName}'); } catch (e) {}
+try { agent = one('${agentName}'); } catch (e) {}
+try { guard = one('${guardName}'); } catch (e) {}
 
 return {
   json: {
-    business_key: intake.business_key,
+    // Escalated runs carry the key from Build exception, so the audit row is written even if
+    // the request itself could not be looked up.
+    business_key: intake?.business_key ?? $json.business_key ?? null,
     outcome: $json.outcome,
     route: guard?.route ?? 'escalate',
     decision: agent?.output ?? null,
@@ -609,7 +649,13 @@ export const guardPreamble = (agentName) => `
 // Deterministic checks. The agent's output is a proposal; nothing here trusts it
 // without comparing against config or a fresh read of the system of record.
 const cfg = $('Config').first().json;
-const out = $('${agentName}').item.json.output ?? null;
+// n8n links each item back to the request it came from. That link can break after the AI
+// Agent node (seen live), so fall back to the node's output when it holds exactly one item,
+// which cannot be ambiguous.
+const one = (name) => { try { return $(name).item.json; } catch (e) { const all = $(name).all(); if (all.length === 1) return all[0].json; throw e; } };
+let out = null;
+try { out = one('${agentName}').output ?? null; } catch (e) {} // unreadable output is treated as none
+
 const reasons = [];
 if (!out) reasons.push('agent_produced_no_valid_output');
 if (out && !(typeof out.confidence === 'number' && out.confidence >= cfg.min_confidence)) {

@@ -19,6 +19,13 @@ export default function build() {
   wf.add(config('Config', [220, 0], {
     clm_base_url: 'https://clm.YOUR-COMPANY.example/api/v1',
     playbook_url: 'https://playbooks.YOUR-COMPANY.example/api',
+    // Document stores the workflow may download from. Key: the exact host a submitted
+    // document_url must name (https only, no port, no credentials, no IP literal).
+    // Value: the base the file is fetched from; the URL's path is appended to it.
+    // A link to any other host goes to a person and is never downloaded.
+    allowed_document_hosts: {
+      'files.YOUR-COMPANY.example': 'https://files.YOUR-COMPANY.example',
+    },
     // Routing is decided here, not by the model. The agent's view is a cross-check.
     queue_by_type: {
       nda: 'commercial', msa: 'commercial', sow: 'commercial', order_form: 'commercial', amendment: 'commercial',
@@ -30,9 +37,36 @@ export default function build() {
     slack_channel: '#legal-intake',
   }));
   wf.add(code(INTAKE, [440, 0], `
+const cfg = $('Config').first().json;
 const b = $json.body ?? $json;
 const missing = ['intake_id', 'document_url', 'submitted_by'].filter((k) => !b[k]);
 if (missing.length) throw new Error('Contract intake missing fields: ' + missing.join(', '));
+
+// The document link comes from the caller, so it is checked here before anything is
+// fetched: https only, the host must be on the allowlist exactly, no credentials, no port,
+// no IP literal, no dot segments or encoded separators. The fetch URL is the configured
+// base for that host plus the path, never the caller's string.
+// Host names are case-insensitive, so the Config keys are matched in lower case too.
+const hosts = Object.fromEntries(Object.entries(cfg.allowed_document_hosts ?? {}).map(([h, base]) => [String(h).toLowerCase(), base]));
+const raw = String(b.document_url).trim();
+let fetchUrl = null;
+let linkProblem = '';
+const m = raw.length <= 2048 ? raw.match(/^https:\\/\\/([^\\/?#\\\\]*)(.*)$/) : null;
+if (!m) linkProblem = 'document_url is not an https link';
+else {
+  const authority = m[1].toLowerCase();
+  const rest = m[2];
+  const pathPart = rest.split('?')[0];
+  if (authority.includes('@')) linkProblem = 'document_url carries credentials';
+  else if (authority.includes(':') || authority.includes('[')) linkProblem = 'document_url names a port or an IPv6 literal';
+  else if (!/^[a-z0-9-]+(\\.[a-z0-9-]+)+$/.test(authority)) linkProblem = 'document_url host is not a plain domain name';
+  else if (/^[0-9.]+$/.test(authority) || /^0x/.test(authority)) linkProblem = 'document_url host is an IP address';
+  else if (!Object.prototype.hasOwnProperty.call(hosts, authority) || typeof hosts[authority] !== 'string') linkProblem = 'document host ' + authority + ' is not on allowed_document_hosts';
+  else if (!/^\\/[A-Za-z0-9._~!$&'()*+,;=:@%\\/-]*(\\?[A-Za-z0-9._~!$&'()*+,;=:@%\\/?-]*)?$/.test(rest)) linkProblem = 'document_url path has characters that are not allowed';
+  else if (pathPart.split('/').some((seg) => seg === '.' || seg === '..') || /%(2e|2f|5c|00)/i.test(rest)) linkProblem = 'document_url path has dot segments or encoded separators';
+  else fetchUrl = hosts[authority].replace(/\\/+$/, '') + rest;
+}
+
 return {
   json: {
     business_key: String(b.intake_id),
@@ -41,15 +75,19 @@ return {
     requester_email: String(b.submitted_by?.email ?? '').toLowerCase(),
     department: String(b.submitted_by?.department ?? ''),
     counterparty_stated: String(b.counterparty ?? ''),
-    document_url: String(b.document_url),
+    document_url: raw,
+    document_fetch_url: fetchUrl,
+    document_allowed: !!fetchUrl,
+    handoff_reason: fetchUrl ? '' : 'document link not downloaded: ' + linkProblem,
     business_context: String(b.business_context ?? '').slice(0, 2000),
     needed_by: b.needed_by ?? null,
   },
 };
 `));
-  wf.add(http('Download contract', [660, 0], { url: '={{ $json.document_url }}', file: true, errorOutput: true }));
-  wf.add({ ...extractPdf('Extract text', [880, 0]), onError: 'continueErrorOutput' });
-  wf.add(code('Check text quality', [1100, 0], `
+  wf.add(ifTrue('Document link allowed?', [660, 0], '={{ $json.document_allowed === true }}'));
+  wf.add(http('Download contract', [880, 0], { url: '={{ $json.document_fetch_url }}', file: true, errorOutput: true }));
+  wf.add({ ...extractPdf('Extract text', [1100, 0]), onError: 'continueErrorOutput' });
+  wf.add(code('Check text quality', [1320, 0], `
 // Scanned PDFs extract to almost nothing. Those go to a person for OCR
 // instead of letting the agent classify an empty page.
 const cfg = $('Config').first().json;
@@ -65,8 +103,9 @@ return {
   },
 };
 `));
-  wf.add(ifTrue('Readable text?', [1320, 0], '={{ $json.readable }}'));
-  wf.chain('Contract submitted', 'Config', INTAKE, 'Download contract');
+  wf.add(ifTrue('Readable text?', [1540, 0], '={{ $json.readable }}'));
+  wf.chain('Contract submitted', 'Config', INTAKE, 'Document link allowed?');
+  wf.link('Document link allowed?', 'Download contract', 0);
   wf.link('Download contract', 'Extract text', 0);
   wf.link('Extract text', 'Check text quality', 0);
   wf.link('Check text quality', 'Readable text?');
@@ -74,7 +113,7 @@ return {
   // ---------- observe & plan ----------
   const block = agentBlock(wf, {
     name: AGENT,
-    left: 1560,
+    left: 1780,
     prompt: `=Contract intake {{ $('${INTAKE}').item.json.intake_id }}
 Submitted by: {{ $('${INTAKE}').item.json.requester_name }} ({{ $('${INTAKE}').item.json.department }})
 Counterparty named by the requester: {{ $('${INTAKE}').item.json.counterparty_stated || 'not given' }}
@@ -157,12 +196,23 @@ ${SYSTEM_TAIL}`,
 ${guardPreamble(AGENT)}
 const req = $('${INTAKE}').item.json;
 const queue = cfg.queue_by_type?.[out?.contract_type] ?? null;
-const norm = (s) => String(s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '').replace(/(inc|llc|ltd|limited|corp|corporation|gmbh|plc)$/, '');
+// Company suffixes are dropped only as whole trailing words ("Zinc" stays "zinc").
+const SUFFIXES = new Set(['inc', 'incorporated', 'llc', 'llp', 'lp', 'ltd', 'limited', 'corp', 'corporation', 'co', 'company', 'gmbh', 'plc']);
+const norm = (s) => {
+  const w = String(s ?? '').toLowerCase().split(/[^\\p{L}\\p{N}]+/u).filter(Boolean);
+  while (w.length > 1 && SUFFIXES.has(w[w.length - 1])) w.pop();
+  return w.join('');
+};
+// Names in reasons reach Slack: escape mrkdwn control characters and cap the length.
+const safe = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\\s+/g, ' ').slice(0, 150);
 
-if (!queue) reasons.push('no queue mapped for contract type ' + out?.contract_type);
-if (queue && out?.suggested_queue !== queue) reasons.push('agent suggests ' + out?.suggested_queue + ', routing map says ' + queue);
-if (req.counterparty_stated && out?.counterparty_name && norm(req.counterparty_stated) !== norm(out.counterparty_name)) {
-  reasons.push('requester named "' + req.counterparty_stated + '", contract says "' + out.counterparty_name + '"');
+if (!queue) reasons.push('no queue mapped for contract type ' + safe(out?.contract_type));
+if (queue && out?.suggested_queue !== queue) reasons.push('agent suggests ' + safe(out?.suggested_queue) + ', routing map says ' + queue);
+// Fail closed: an empty counterparty from the agent cannot skip the cross-check.
+if (out && !norm(out.counterparty_name)) {
+  reasons.push('agent returned no counterparty name');
+} else if (out && req.counterparty_stated && norm(req.counterparty_stated) !== norm(out.counterparty_name)) {
+  reasons.push('requester named "' + safe(req.counterparty_stated) + '", contract says "' + safe(out.counterparty_name) + '"');
 }
 
 const ok = reasons.length === 0;
@@ -173,6 +223,8 @@ return {
     guardrail_reasons: reasons,
     queue,
     priority: out?.risk_tier === 'high' ? 'high' : 'normal',
+    contract_type: out?.contract_type ?? null,
+    counterparty: out?.counterparty_name ?? null,
     planned_actions: ok ? [{ action: 'clm.create_matter', queue, risk_tier: out.risk_tier }] : [],
   },
 };
@@ -193,8 +245,8 @@ return {
   external_ref: $('${INTAKE}').item.json.intake_id,
   queue: $json.queue,
   priority: $json.priority,
-  contract_type: ${o}.contract_type,
-  counterparty: ${o}.counterparty_name,
+  contract_type: $json.contract_type,
+  counterparty: $json.counterparty,
   master_agreement_id: ${o}.master_agreement_id,
   risk_tier: ${o}.risk_tier,
   clause_flags: ${o}.clause_flags,
@@ -212,27 +264,49 @@ return {
     errorOutput: true,
   }));
   wf.add(code('Verify matter', [ax + 440, 0], `
+// The read-back must match the plan on every field the matter was routed on.
 const g = $('${GUARD}').item.json;
-const ok = !!$json.id && $json.queue === g.queue && $json.external_ref === $('${INTAKE}').item.json.intake_id;
+const out = $('${AGENT}').item.json.output ?? {};
+const checks = {
+  id: !!$json.id,
+  external_ref: $json.external_ref === $('${INTAKE}').item.json.intake_id,
+  queue: !!g.queue && $json.queue === g.queue,
+  priority: !!g.priority && $json.priority === g.priority,
+  contract_type: !!g.contract_type && $json.contract_type === g.contract_type,
+  counterparty: !!g.counterparty && $json.counterparty === g.counterparty,
+};
+const mismatched = Object.keys(checks).filter((k) => !checks[k]);
+const ok = mismatched.length === 0;
+
+// Slack mrkdwn escaping for anything that came from the contract, the model or the CLM,
+// so text like <!channel> or a link cannot be injected into the fixed message.
+const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\\s+/g, ' ').slice(0, 150);
+const flags = Array.isArray(out.clause_flags) ? out.clause_flags.length : 0;
+const slack_text = (g.priority === 'high' ? ':red_circle: ' : ':large_blue_circle: ')
+  + 'New ' + esc(String(g.contract_type ?? '').toUpperCase()) + ' with ' + esc(g.counterparty)
+  + ' in *' + esc($json.queue) + '* · matter ' + esc($json.id) + ' · risk ' + esc(out.risk_tier) + ' · ' + flags + ' clause flags';
+
 return {
   json: {
     verified: ok,
     verify_failed: !ok,
-    verify_detail: ok ? '' : 'CLM matter does not match the planned queue or reference',
+    verify_detail: ok ? '' : 'CLM matter does not match the plan on: ' + mismatched.join(', '),
     matter_id: $json.id,
     queue: $json.queue,
+    queue_label: String($json.queue ?? '').replace(/_/g, ' '),
+    slack_text,
   },
 };
 `));
   wf.add(ifTrue('Verified?', [ax + 660, 0], '={{ $json.verified }}'));
   wf.add(slack('Notify legal queue', [ax + 880, 0], `={{ ${cfg}.slack_channel }}`,
-    `={{ ($('${GUARD}').item.json.priority === 'high' ? ':red_circle: ' : ':large_blue_circle: ') + 'New ' + ${o}.contract_type.toUpperCase() + ' with ' + ${o}.counterparty_name + ' in *' + $json.queue + '* · matter ' + $json.matter_id + ' · risk ' + ${o}.risk_tier + ' · ' + ${o}.clause_flags.length + ' clause flags' }}`));
+    `={{ $('Verify matter').item.json.slack_text }}`));
   wf.add(gmail('Acknowledge requester', [ax + 1100, 0], {
     to: `={{ $('${INTAKE}').item.json.requester_email }}`,
     subject: `=Legal received your contract ({{ $('${INTAKE}').item.json.intake_id }})`,
     message: `=Hello {{ $('${INTAKE}').item.json.requester_name.split(' ')[0] || 'there' }},
 
-Your contract is with the {{ $('Verify matter').item.json.queue.replace('_', ' ') }} legal team as matter {{ $('Verify matter').item.json.matter_id }}. An attorney will review it and come back to you. This note confirms receipt only; it is not a legal review.
+Your contract is with the {{ $('Verify matter').item.json.queue_label }} legal team as matter {{ $('Verify matter').item.json.matter_id }}. An attorney will review it and come back to you. This note confirms receipt only; it is not a legal review.
 
 Please don't sign or send the contract to the counterparty until you hear from Legal.`,
   }));
@@ -249,8 +323,10 @@ Please don't sign or send the contract to the counterparty until you hear from L
   const h = handoffTail(wf, {
     x: ax, y: 600, agentName: AGENT, intakeName: INTAKE, guardName: GUARD,
     team: 'legal triage', channel: `={{ ${cfg}.slack_channel }}`,
-    summary: `'Intake ' + intake.intake_id + ' from ' + intake.requester_name + ' · ' + (agent?.output?.contract_type ?? 'unclassified') + ' · counterparty ' + (agent?.output?.counterparty_name ?? intake.counterparty_stated ?? 'unknown')`,
+    // Contract and requester text is escaped for Slack mrkdwn before it reaches the message.
+    summary: `((e) => 'Intake ' + e(intake.intake_id) + ' from ' + e(intake.requester_name) + ' · ' + e(agent?.output?.contract_type || 'unclassified') + ' · counterparty ' + e(agent?.output?.counterparty_name || intake.counterparty_stated || 'unknown'))((s) => String(s ?? '').slice(0, 150))`, // escaped for Slack by the shared hand-off
   });
+  wf.link('Document link allowed?', h.first, 1);
   wf.link('Download contract', h.first, 1);
   wf.link('Extract text', h.first, 1);
   wf.link('Readable text?', h.first, 1);
@@ -266,17 +342,17 @@ Please don't sign or send the contract to the counterparty until you hear from L
   wf.link(h.last, a.first);
 
   // ---------- stickies ----------
-  wf.group({ name: 'Stage: intake', title: '1 · Intake and text extraction', color: COLOR.intake, nodes: ['Contract submitted', 'Config', INTAKE, 'Download contract', 'Extract text', 'Check text quality', 'Readable text?'], body: `
-The intake form posts the requester, counterparty, context and a link to the PDF. The file is downloaded and its text extracted.
+  wf.group({ name: 'Stage: intake', title: '1 · Intake and text extraction', color: COLOR.intake, nodes: ['Contract submitted', 'Config', INTAKE, 'Document link allowed?', 'Download contract', 'Extract text', 'Check text quality', 'Readable text?'], body: `
+The intake form posts the requester, counterparty, context and a link to the PDF. The link must be https on a host listed in **allowed_document_hosts** in Config; any other link goes to a person and is never fetched. The file is downloaded from the configured base for that host and its text extracted.
 **Scanned PDFs** extract to almost nothing and go straight to a person for OCR. **Config** holds the type-to-queue routing map.` });
   wf.group({ name: 'Stage: observe and plan', title: '2 · Classify (agent)', color: COLOR.plan, nodes: block.nodes, body: `
 Claude classifies the contract, extracts parties, law, term and value, finds existing master agreements in the CLM, and flags clauses that depart from the playbook with severity and a short excerpt.
 The contract text is passed as quoted data. **It never approves, redlines or signs.**` });
   wf.group({ name: 'Stage: guardrails', title: '3 · Guardrails', color: COLOR.guard, nodes: [GUARD, 'Route automatically?'], body: `
-The queue comes from the **routing map in Config**, not from the model. Escalate if the agent's queue disagrees, the type is unmapped, the counterparty doesn't match the requester's, or confidence is low.
+The queue comes from the **routing map in Config**, not from the model. Escalate if the agent's queue disagrees, the type is unmapped, the agent gives no counterparty, the counterparty doesn't match the requester's, or confidence is low.
 High-risk contracts still route automatically, flagged high priority.` });
   wf.group({ name: 'Stage: act and verify', title: '4 · Route and verify', color: COLOR.act, nodes: ['Create matter (CLM)', 'Read back matter (CLM)', 'Verify matter', 'Verified?', 'Notify legal queue', 'Acknowledge requester', 'Mark completed'], body: `
-Creates the CLM matter (idempotent on intake id) with flags and summary, reads it back, posts to the legal queue channel, and sends the requester a **fixed** receipt that says it is not a legal review.` });
+Creates the CLM matter (idempotent on intake id) with flags and summary, reads it back and checks reference, queue, priority, contract type and counterparty against the plan, posts a fixed message to the legal queue channel with contract text escaped, and sends the requester a **fixed** receipt that says it is not a legal review.` });
   wf.group({ name: 'Stage: hand off', title: '5 · Hand off to legal triage', color: COLOR.handoff, nodes: h.nodes, body: `
 Unreadable files, disagreements and failed writes go to legal triage with the classification, flags and tool trace.` });
   wf.group({ name: 'Stage: audit', title: '6 · Audit', color: COLOR.audit, nodes: a.nodes, body: `
@@ -287,7 +363,7 @@ One **agent_runs** row per intake.` });
     overview: `## LegalTech · Contract intake agent
 **Job:** take contract intake off the legal desk. Read the document, classify it, compare it with the playbook, and open a matter in the right queue with the facts and clause flags an attorney needs first.
 
-**Flow:** intake → download and extract text → agent classifies and compares (read-only) → routing from a fixed map, cross-checked → create matter, read back, notify → hand off the rest → audit.
+**Flow:** intake → check the document link against the allowlist → download and extract text → agent classifies and compares (read-only) → routing from a fixed map, cross-checked → create matter, read back, notify → hand off the rest → audit.
 
 **Never does**
 - Approves, redlines or signs
@@ -299,7 +375,7 @@ One **agent_runs** row per intake.` });
 1. Run **sql/schema.sql**. Select the Postgres credential on *Queue exception* and *Write audit record*.
 2. Credentials: **Anthropic**, **Header Auth** for the CLM and playbook APIs, **Gmail**, **Slack**. If document links need auth, add it to *Download contract*.
 3. **CLM endpoints are a gateway contract**: agreements search, matters create/read, playbooks. Map them to Ironclad, Agiloft, Icertis or your matter system.
-4. Edit **Config**: the **queue_by_type** routing map, text-length limits, confidence floor, channel.
+4. Edit **Config**: **allowed_document_hosts** (the document stores links may point at), the **queue_by_type** routing map, text-length limits, confidence floor, channel.
 5. Test: \`curl -X POST <test webhook URL> -H 'Content-Type: application/json' -d @samples/legaltech-contract-intake.json\``,
   });
 

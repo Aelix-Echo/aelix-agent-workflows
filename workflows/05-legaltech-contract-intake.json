@@ -43,6 +43,12 @@
               "type": "string"
             },
             {
+              "id": "60fef39f-647c-4d1e-abd5-3a6ed3c83d0a",
+              "name": "allowed_document_hosts",
+              "value": "={{ {\"files.YOUR-COMPANY.example\":\"https://files.YOUR-COMPANY.example\"} }}",
+              "type": "object"
+            },
+            {
               "id": "f6edba96-5990-477e-a928-0af9dcec819f",
               "name": "queue_by_type",
               "value": "={{ {\"nda\":\"commercial\",\"msa\":\"commercial\",\"sow\":\"commercial\",\"order_form\":\"commercial\",\"amendment\":\"commercial\",\"dpa\":\"privacy\",\"vendor_agreement\":\"procurement\",\"lease\":\"real_estate\",\"employment\":\"employment\"} }}",
@@ -89,7 +95,7 @@
     {
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "const b = $json.body ?? $json;\nconst missing = ['intake_id', 'document_url', 'submitted_by'].filter((k) => !b[k]);\nif (missing.length) throw new Error('Contract intake missing fields: ' + missing.join(', '));\nreturn {\n  json: {\n    business_key: String(b.intake_id),\n    intake_id: String(b.intake_id),\n    requester_name: String(b.submitted_by?.name ?? ''),\n    requester_email: String(b.submitted_by?.email ?? '').toLowerCase(),\n    department: String(b.submitted_by?.department ?? ''),\n    counterparty_stated: String(b.counterparty ?? ''),\n    document_url: String(b.document_url),\n    business_context: String(b.business_context ?? '').slice(0, 2000),\n    needed_by: b.needed_by ?? null,\n  },\n};"
+        "jsCode": "const cfg = $('Config').first().json;\nconst b = $json.body ?? $json;\nconst missing = ['intake_id', 'document_url', 'submitted_by'].filter((k) => !b[k]);\nif (missing.length) throw new Error('Contract intake missing fields: ' + missing.join(', '));\n\n// The document link comes from the caller, so it is checked here before anything is\n// fetched: https only, the host must be on the allowlist exactly, no credentials, no port,\n// no IP literal, no dot segments or encoded separators. The fetch URL is the configured\n// base for that host plus the path, never the caller's string.\n// Host names are case-insensitive, so the Config keys are matched in lower case too.\nconst hosts = Object.fromEntries(Object.entries(cfg.allowed_document_hosts ?? {}).map(([h, base]) => [String(h).toLowerCase(), base]));\nconst raw = String(b.document_url).trim();\nlet fetchUrl = null;\nlet linkProblem = '';\nconst m = raw.length <= 2048 ? raw.match(/^https:\\/\\/([^\\/?#\\\\]*)(.*)$/) : null;\nif (!m) linkProblem = 'document_url is not an https link';\nelse {\n  const authority = m[1].toLowerCase();\n  const rest = m[2];\n  const pathPart = rest.split('?')[0];\n  if (authority.includes('@')) linkProblem = 'document_url carries credentials';\n  else if (authority.includes(':') || authority.includes('[')) linkProblem = 'document_url names a port or an IPv6 literal';\n  else if (!/^[a-z0-9-]+(\\.[a-z0-9-]+)+$/.test(authority)) linkProblem = 'document_url host is not a plain domain name';\n  else if (/^[0-9.]+$/.test(authority) || /^0x/.test(authority)) linkProblem = 'document_url host is an IP address';\n  else if (!Object.prototype.hasOwnProperty.call(hosts, authority) || typeof hosts[authority] !== 'string') linkProblem = 'document host ' + authority + ' is not on allowed_document_hosts';\n  else if (!/^\\/[A-Za-z0-9._~!$&'()*+,;=:@%\\/-]*(\\?[A-Za-z0-9._~!$&'()*+,;=:@%\\/?-]*)?$/.test(rest)) linkProblem = 'document_url path has characters that are not allowed';\n  else if (pathPart.split('/').some((seg) => seg === '.' || seg === '..') || /%(2e|2f|5c|00)/i.test(rest)) linkProblem = 'document_url path has dot segments or encoded separators';\n  else fetchUrl = hosts[authority].replace(/\\/+$/, '') + rest;\n}\n\nreturn {\n  json: {\n    business_key: String(b.intake_id),\n    intake_id: String(b.intake_id),\n    requester_name: String(b.submitted_by?.name ?? ''),\n    requester_email: String(b.submitted_by?.email ?? '').toLowerCase(),\n    department: String(b.submitted_by?.department ?? ''),\n    counterparty_stated: String(b.counterparty ?? ''),\n    document_url: raw,\n    document_fetch_url: fetchUrl,\n    document_allowed: !!fetchUrl,\n    handoff_reason: fetchUrl ? '' : 'document link not downloaded: ' + linkProblem,\n    business_context: String(b.business_context ?? '').slice(0, 2000),\n    needed_by: b.needed_by ?? null,\n  },\n};"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -102,8 +108,43 @@
     },
     {
       "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "1f6cb739-f7f6-4c3b-a8c6-a37a9d823f03",
+              "leftValue": "={{ $json.document_allowed === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        660,
+        0
+      ],
+      "name": "Document link allowed?",
+      "id": "3ed3f926-2636-4c20-acc3-86b9bb4af004"
+    },
+    {
+      "parameters": {
         "method": "GET",
-        "url": "={{ $json.document_url }}",
+        "url": "={{ $json.document_fetch_url }}",
         "options": {
           "response": {
             "response": {
@@ -115,7 +156,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.5,
       "position": [
-        660,
+        880,
         0
       ],
       "name": "Download contract",
@@ -133,7 +174,7 @@
       "type": "n8n-nodes-base.extractFromFile",
       "typeVersion": 1.1,
       "position": [
-        880,
+        1100,
         0
       ],
       "name": "Extract text",
@@ -148,7 +189,7 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1100,
+        1320,
         0
       ],
       "name": "Check text quality",
@@ -183,7 +224,7 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.3,
       "position": [
-        1320,
+        1540,
         0
       ],
       "name": "Readable text?",
@@ -204,7 +245,7 @@
       "type": "@n8n/n8n-nodes-langchain.agent",
       "typeVersion": 3.1,
       "position": [
-        1785,
+        2005,
         0
       ],
       "name": "Contract intake agent",
@@ -229,7 +270,7 @@
       "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
       "typeVersion": 1.6,
       "position": [
-        1560,
+        1780,
         240
       ],
       "name": "Contract intake agent · Claude",
@@ -248,7 +289,7 @@
       "type": "n8n-nodes-base.httpRequestTool",
       "typeVersion": 4.5,
       "position": [
-        1750,
+        1970,
         240
       ],
       "name": "Get playbook",
@@ -280,7 +321,7 @@
       "type": "n8n-nodes-base.httpRequestTool",
       "typeVersion": 4.5,
       "position": [
-        1940,
+        2160,
         240
       ],
       "name": "Find counterparty agreements (CLM)",
@@ -289,12 +330,13 @@
     {
       "parameters": {
         "schemaType": "manual",
-        "inputSchema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"contract_type\": {\n      \"type\": \"string\",\n      \"enum\": [\n        \"nda\",\n        \"msa\",\n        \"sow\",\n        \"order_form\",\n        \"amendment\",\n        \"dpa\",\n        \"vendor_agreement\",\n        \"lease\",\n        \"employment\",\n        \"other\"\n      ],\n      \"description\": \"Contract type.\"\n    },\n    \"paper\": {\n      \"type\": \"string\",\n      \"enum\": [\n        \"ours\",\n        \"theirs\",\n        \"unclear\"\n      ],\n      \"description\": \"Whose template this is.\"\n    },\n    \"counterparty_name\": {\n      \"type\": \"string\",\n      \"description\": \"Counterparty legal name as written in the contract.\"\n    },\n    \"governing_law\": {\n      \"type\": \"string\",\n      \"description\": \"Governing law, or empty if not stated.\"\n    },\n    \"term\": {\n      \"type\": \"string\",\n      \"description\": \"Term and renewal in a few words.\"\n    },\n    \"auto_renewal\": {\n      \"type\": \"boolean\",\n      \"description\": \"Renews automatically.\"\n    },\n    \"estimated_value\": {\n      \"type\": [\n        \"number\",\n        \"null\"\n      ],\n      \"description\": \"Contract value if stated.\"\n    },\n    \"master_agreement_id\": {\n      \"type\": [\n        \"string\",\n        \"null\"\n      ],\n      \"description\": \"Existing agreement this falls under, or null.\"\n    },\n    \"clause_flags\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\",\n        \"properties\": {\n          \"clause\": {\n            \"type\": \"string\",\n            \"description\": \"Clause name.\"\n          },\n          \"location\": {\n            \"type\": \"string\",\n            \"description\": \"Section number or heading.\"\n          },\n          \"contract_position\": {\n            \"type\": \"string\",\n            \"description\": \"What the contract says, briefly.\"\n          },\n          \"playbook_position\": {\n            \"type\": \"string\",\n            \"description\": \"What the playbook wants.\"\n          },\n          \"severity\": {\n            \"type\": \"string\",\n            \"enum\": [\n              \"low\",\n              \"medium\",\n              \"high\"\n            ],\n            \"description\": \"Severity.\"\n          },\n          \"excerpt\": {\n            \"type\": \"string\",\n            \"description\": \"Short quote from the contract.\"\n          }\n        },\n        \"required\": [\n          \"clause\",\n          \"location\",\n          \"contract_position\",\n          \"playbook_position\",\n          \"severity\",\n          \"excerpt\"\n        ],\n        \"additionalProperties\": false\n      },\n      \"description\": \"Departures from the playbook.\"\n    },\n    \"risk_tier\": {\n      \"type\": \"string\",\n      \"enum\": [\n        \"low\",\n        \"medium\",\n        \"high\"\n      ],\n      \"description\": \"Overall risk.\"\n    },\n    \"suggested_queue\": {\n      \"type\": \"string\",\n      \"enum\": [\n        \"commercial\",\n        \"privacy\",\n        \"procurement\",\n        \"real_estate\",\n        \"employment\",\n        \"general_triage\"\n      ],\n      \"description\": \"Queue you think fits.\"\n    },\n    \"attorney_summary\": {\n      \"type\": \"string\",\n      \"description\": \"Three to six sentences for the assigned attorney.\"\n    },\n    \"confidence\": {\n      \"type\": \"number\",\n      \"description\": \"0 to 1. How sure you are that the recommendation is right given what the tools returned. Below 0.5 means you are guessing.\"\n    },\n    \"rationale\": {\n      \"type\": \"string\",\n      \"description\": \"Two to five sentences a reviewer can check against the tool results. Cite the record ids you relied on.\"\n    },\n    \"questions_for_human\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"string\"\n      },\n      \"description\": \"If a person has to decide, the specific questions they need to answer. Empty when nothing is open.\"\n    }\n  },\n  \"required\": [\n    \"contract_type\",\n    \"paper\",\n    \"counterparty_name\",\n    \"governing_law\",\n    \"term\",\n    \"auto_renewal\",\n    \"estimated_value\",\n    \"master_agreement_id\",\n    \"clause_flags\",\n    \"risk_tier\",\n    \"suggested_queue\",\n    \"attorney_summary\",\n    \"confidence\",\n    \"rationale\",\n    \"questions_for_human\"\n  ],\n  \"additionalProperties\": false\n}"
+        "inputSchema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"contract_type\": {\n      \"type\": \"string\",\n      \"enum\": [\n        \"nda\",\n        \"msa\",\n        \"sow\",\n        \"order_form\",\n        \"amendment\",\n        \"dpa\",\n        \"vendor_agreement\",\n        \"lease\",\n        \"employment\",\n        \"other\"\n      ],\n      \"description\": \"Contract type.\"\n    },\n    \"paper\": {\n      \"type\": \"string\",\n      \"enum\": [\n        \"ours\",\n        \"theirs\",\n        \"unclear\"\n      ],\n      \"description\": \"Whose template this is.\"\n    },\n    \"counterparty_name\": {\n      \"type\": \"string\",\n      \"description\": \"Counterparty legal name as written in the contract.\"\n    },\n    \"governing_law\": {\n      \"type\": \"string\",\n      \"description\": \"Governing law, or empty if not stated.\"\n    },\n    \"term\": {\n      \"type\": \"string\",\n      \"description\": \"Term and renewal in a few words.\"\n    },\n    \"auto_renewal\": {\n      \"type\": \"boolean\",\n      \"description\": \"Renews automatically.\"\n    },\n    \"estimated_value\": {\n      \"type\": [\n        \"number\",\n        \"null\"\n      ],\n      \"description\": \"Contract value if stated.\"\n    },\n    \"master_agreement_id\": {\n      \"type\": [\n        \"string\",\n        \"null\"\n      ],\n      \"description\": \"Existing agreement this falls under, or null.\"\n    },\n    \"clause_flags\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\",\n        \"properties\": {\n          \"clause\": {\n            \"type\": \"string\",\n            \"description\": \"Clause name.\"\n          },\n          \"location\": {\n            \"type\": \"string\",\n            \"description\": \"Section number or heading.\"\n          },\n          \"contract_position\": {\n            \"type\": \"string\",\n            \"description\": \"What the contract says, briefly.\"\n          },\n          \"playbook_position\": {\n            \"type\": \"string\",\n            \"description\": \"What the playbook wants.\"\n          },\n          \"severity\": {\n            \"type\": \"string\",\n            \"enum\": [\n              \"low\",\n              \"medium\",\n              \"high\"\n            ],\n            \"description\": \"Severity.\"\n          },\n          \"excerpt\": {\n            \"type\": \"string\",\n            \"description\": \"Short quote from the contract.\"\n          }\n        },\n        \"required\": [\n          \"clause\",\n          \"location\",\n          \"contract_position\",\n          \"playbook_position\",\n          \"severity\",\n          \"excerpt\"\n        ],\n        \"additionalProperties\": false\n      },\n      \"description\": \"Departures from the playbook.\"\n    },\n    \"risk_tier\": {\n      \"type\": \"string\",\n      \"enum\": [\n        \"low\",\n        \"medium\",\n        \"high\"\n      ],\n      \"description\": \"Overall risk.\"\n    },\n    \"suggested_queue\": {\n      \"type\": \"string\",\n      \"enum\": [\n        \"commercial\",\n        \"privacy\",\n        \"procurement\",\n        \"real_estate\",\n        \"employment\",\n        \"general_triage\"\n      ],\n      \"description\": \"Queue you think fits.\"\n    },\n    \"attorney_summary\": {\n      \"type\": \"string\",\n      \"description\": \"Three to six sentences for the assigned attorney.\"\n    },\n    \"confidence\": {\n      \"type\": \"number\",\n      \"description\": \"0 to 1. How sure you are that the recommendation is right given what the tools returned. Below 0.5 means you are guessing.\"\n    },\n    \"rationale\": {\n      \"type\": \"string\",\n      \"description\": \"Two to five sentences a reviewer can check against the tool results. Cite the record ids you relied on.\"\n    },\n    \"questions_for_human\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"string\"\n      },\n      \"description\": \"If a person has to decide, the specific questions they need to answer. Empty when nothing is open.\"\n    }\n  },\n  \"required\": [\n    \"contract_type\",\n    \"paper\",\n    \"counterparty_name\",\n    \"governing_law\",\n    \"term\",\n    \"auto_renewal\",\n    \"estimated_value\",\n    \"master_agreement_id\",\n    \"clause_flags\",\n    \"risk_tier\",\n    \"suggested_queue\",\n    \"attorney_summary\",\n    \"confidence\",\n    \"rationale\",\n    \"questions_for_human\"\n  ],\n  \"additionalProperties\": false\n}",
+        "autoFix": true
       },
       "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
       "typeVersion": 1.3,
       "position": [
-        2130,
+        2350,
         240
       ],
       "name": "Contract intake agent · output schema",
@@ -303,12 +345,12 @@
     {
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "// Deterministic checks. The agent's output is a proposal; nothing here trusts it\n// without comparing against config or a fresh read of the system of record.\nconst cfg = $('Config').first().json;\nconst out = $('Contract intake agent').item.json.output ?? null;\nconst reasons = [];\nif (!out) reasons.push('agent_produced_no_valid_output');\nif (out && !(typeof out.confidence === 'number' && out.confidence >= cfg.min_confidence)) {\n  reasons.push('confidence ' + out?.confidence + ' below ' + cfg.min_confidence);\n}\n\nconst req = $('Normalize intake').item.json;\nconst queue = cfg.queue_by_type?.[out?.contract_type] ?? null;\nconst norm = (s) => String(s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '').replace(/(inc|llc|ltd|limited|corp|corporation|gmbh|plc)$/, '');\n\nif (!queue) reasons.push('no queue mapped for contract type ' + out?.contract_type);\nif (queue && out?.suggested_queue !== queue) reasons.push('agent suggests ' + out?.suggested_queue + ', routing map says ' + queue);\nif (req.counterparty_stated && out?.counterparty_name && norm(req.counterparty_stated) !== norm(out.counterparty_name)) {\n  reasons.push('requester named \"' + req.counterparty_stated + '\", contract says \"' + out.counterparty_name + '\"');\n}\n\nconst ok = reasons.length === 0;\nreturn {\n  json: {\n    business_key: req.business_key,\n    route: ok ? 'auto' : 'escalate',\n    guardrail_reasons: reasons,\n    queue,\n    priority: out?.risk_tier === 'high' ? 'high' : 'normal',\n    planned_actions: ok ? [{ action: 'clm.create_matter', queue, risk_tier: out.risk_tier }] : [],\n  },\n};"
+        "jsCode": "// Deterministic checks. The agent's output is a proposal; nothing here trusts it\n// without comparing against config or a fresh read of the system of record.\nconst cfg = $('Config').first().json;\n// n8n links each item back to the request it came from. That link can break after the AI\n// Agent node (seen live), so fall back to the node's output when it holds exactly one item,\n// which cannot be ambiguous.\nconst one = (name) => { try { return $(name).item.json; } catch (e) { const all = $(name).all(); if (all.length === 1) return all[0].json; throw e; } };\nlet out = null;\ntry { out = one('Contract intake agent').output ?? null; } catch (e) {} // unreadable output is treated as none\n\nconst reasons = [];\nif (!out) reasons.push('agent_produced_no_valid_output');\nif (out && !(typeof out.confidence === 'number' && out.confidence >= cfg.min_confidence)) {\n  reasons.push('confidence ' + out?.confidence + ' below ' + cfg.min_confidence);\n}\n\nconst req = $('Normalize intake').item.json;\nconst queue = cfg.queue_by_type?.[out?.contract_type] ?? null;\n// Company suffixes are dropped only as whole trailing words (\"Zinc\" stays \"zinc\").\nconst SUFFIXES = new Set(['inc', 'incorporated', 'llc', 'llp', 'lp', 'ltd', 'limited', 'corp', 'corporation', 'co', 'company', 'gmbh', 'plc']);\nconst norm = (s) => {\n  const w = String(s ?? '').toLowerCase().split(/[^\\p{L}\\p{N}]+/u).filter(Boolean);\n  while (w.length > 1 && SUFFIXES.has(w[w.length - 1])) w.pop();\n  return w.join('');\n};\n// Names in reasons reach Slack: escape mrkdwn control characters and cap the length.\nconst safe = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\\s+/g, ' ').slice(0, 150);\n\nif (!queue) reasons.push('no queue mapped for contract type ' + safe(out?.contract_type));\nif (queue && out?.suggested_queue !== queue) reasons.push('agent suggests ' + safe(out?.suggested_queue) + ', routing map says ' + queue);\n// Fail closed: an empty counterparty from the agent cannot skip the cross-check.\nif (out && !norm(out.counterparty_name)) {\n  reasons.push('agent returned no counterparty name');\n} else if (out && req.counterparty_stated && norm(req.counterparty_stated) !== norm(out.counterparty_name)) {\n  reasons.push('requester named \"' + safe(req.counterparty_stated) + '\", contract says \"' + safe(out.counterparty_name) + '\"');\n}\n\nconst ok = reasons.length === 0;\nreturn {\n  json: {\n    business_key: req.business_key,\n    route: ok ? 'auto' : 'escalate',\n    guardrail_reasons: reasons,\n    queue,\n    priority: out?.risk_tier === 'high' ? 'high' : 'normal',\n    contract_type: out?.contract_type ?? null,\n    counterparty: out?.counterparty_name ?? null,\n    planned_actions: ok ? [{ action: 'clm.create_matter', queue, risk_tier: out.risk_tier }] : [],\n  },\n};"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2370,
+        2590,
         0
       ],
       "name": "Guardrails",
@@ -343,7 +385,7 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.3,
       "position": [
-        2590,
+        2810,
         0
       ],
       "name": "Route automatically?",
@@ -366,13 +408,13 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({\n  external_ref: $('Normalize intake').item.json.intake_id,\n  queue: $json.queue,\n  priority: $json.priority,\n  contract_type: $('Contract intake agent').item.json.output.contract_type,\n  counterparty: $('Contract intake agent').item.json.output.counterparty_name,\n  master_agreement_id: $('Contract intake agent').item.json.output.master_agreement_id,\n  risk_tier: $('Contract intake agent').item.json.output.risk_tier,\n  clause_flags: $('Contract intake agent').item.json.output.clause_flags,\n  summary: $('Contract intake agent').item.json.output.attorney_summary,\n  document_url: $('Normalize intake').item.json.document_url,\n  requester: { name: $('Normalize intake').item.json.requester_name, email: $('Normalize intake').item.json.requester_email },\n  needed_by: $('Normalize intake').item.json.needed_by,\n  created_by: 'aelix-contract-intake-agent'\n}) }}",
+        "jsonBody": "={{ JSON.stringify({\n  external_ref: $('Normalize intake').item.json.intake_id,\n  queue: $json.queue,\n  priority: $json.priority,\n  contract_type: $json.contract_type,\n  counterparty: $json.counterparty,\n  master_agreement_id: $('Contract intake agent').item.json.output.master_agreement_id,\n  risk_tier: $('Contract intake agent').item.json.output.risk_tier,\n  clause_flags: $('Contract intake agent').item.json.output.clause_flags,\n  summary: $('Contract intake agent').item.json.output.attorney_summary,\n  document_url: $('Normalize intake').item.json.document_url,\n  requester: { name: $('Normalize intake').item.json.requester_name, email: $('Normalize intake').item.json.requester_email },\n  needed_by: $('Normalize intake').item.json.needed_by,\n  created_by: 'aelix-contract-intake-agent'\n}) }}",
         "options": {}
       },
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.5,
       "position": [
-        2850,
+        3070,
         0
       ],
       "name": "Create matter (CLM)",
@@ -393,7 +435,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.5,
       "position": [
-        3070,
+        3290,
         0
       ],
       "name": "Read back matter (CLM)",
@@ -406,12 +448,12 @@
     {
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "const g = $('Guardrails').item.json;\nconst ok = !!$json.id && $json.queue === g.queue && $json.external_ref === $('Normalize intake').item.json.intake_id;\nreturn {\n  json: {\n    verified: ok,\n    verify_failed: !ok,\n    verify_detail: ok ? '' : 'CLM matter does not match the planned queue or reference',\n    matter_id: $json.id,\n    queue: $json.queue,\n  },\n};"
+        "jsCode": "// The read-back must match the plan on every field the matter was routed on.\nconst g = $('Guardrails').item.json;\nconst out = $('Contract intake agent').item.json.output ?? {};\nconst checks = {\n  id: !!$json.id,\n  external_ref: $json.external_ref === $('Normalize intake').item.json.intake_id,\n  queue: !!g.queue && $json.queue === g.queue,\n  priority: !!g.priority && $json.priority === g.priority,\n  contract_type: !!g.contract_type && $json.contract_type === g.contract_type,\n  counterparty: !!g.counterparty && $json.counterparty === g.counterparty,\n};\nconst mismatched = Object.keys(checks).filter((k) => !checks[k]);\nconst ok = mismatched.length === 0;\n\n// Slack mrkdwn escaping for anything that came from the contract, the model or the CLM,\n// so text like <!channel> or a link cannot be injected into the fixed message.\nconst esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\\s+/g, ' ').slice(0, 150);\nconst flags = Array.isArray(out.clause_flags) ? out.clause_flags.length : 0;\nconst slack_text = (g.priority === 'high' ? ':red_circle: ' : ':large_blue_circle: ')\n  + 'New ' + esc(String(g.contract_type ?? '').toUpperCase()) + ' with ' + esc(g.counterparty)\n  + ' in *' + esc($json.queue) + '* · matter ' + esc($json.id) + ' · risk ' + esc(out.risk_tier) + ' · ' + flags + ' clause flags';\n\nreturn {\n  json: {\n    verified: ok,\n    verify_failed: !ok,\n    verify_detail: ok ? '' : 'CLM matter does not match the plan on: ' + mismatched.join(', '),\n    matter_id: $json.id,\n    queue: $json.queue,\n    queue_label: String($json.queue ?? '').replace(/_/g, ' '),\n    slack_text,\n  },\n};"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        3290,
+        3510,
         0
       ],
       "name": "Verify matter",
@@ -446,7 +488,7 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.3,
       "position": [
-        3510,
+        3730,
         0
       ],
       "name": "Verified?",
@@ -462,7 +504,7 @@
           "value": "={{ $('Config').first().json.slack_channel }}",
           "mode": "name"
         },
-        "text": "={{ ($('Guardrails').item.json.priority === 'high' ? ':red_circle: ' : ':large_blue_circle: ') + 'New ' + $('Contract intake agent').item.json.output.contract_type.toUpperCase() + ' with ' + $('Contract intake agent').item.json.output.counterparty_name + ' in *' + $json.queue + '* · matter ' + $json.matter_id + ' · risk ' + $('Contract intake agent').item.json.output.risk_tier + ' · ' + $('Contract intake agent').item.json.output.clause_flags.length + ' clause flags' }}",
+        "text": "={{ $('Verify matter').item.json.slack_text }}",
         "otherOptions": {
           "includeLinkToWorkflow": false
         }
@@ -470,7 +512,7 @@
       "type": "n8n-nodes-base.slack",
       "typeVersion": 2.7,
       "position": [
-        3730,
+        3950,
         0
       ],
       "name": "Notify legal queue",
@@ -484,7 +526,7 @@
         "sendTo": "={{ $('Normalize intake').item.json.requester_email }}",
         "subject": "=Legal received your contract ({{ $('Normalize intake').item.json.intake_id }})",
         "emailType": "text",
-        "message": "=Hello {{ $('Normalize intake').item.json.requester_name.split(' ')[0] || 'there' }},\n\nYour contract is with the {{ $('Verify matter').item.json.queue.replace('_', ' ') }} legal team as matter {{ $('Verify matter').item.json.matter_id }}. An attorney will review it and come back to you. This note confirms receipt only; it is not a legal review.\n\nPlease don't sign or send the contract to the counterparty until you hear from Legal.",
+        "message": "=Hello {{ $('Normalize intake').item.json.requester_name.split(' ')[0] || 'there' }},\n\nYour contract is with the {{ $('Verify matter').item.json.queue_label }} legal team as matter {{ $('Verify matter').item.json.matter_id }}. An attorney will review it and come back to you. This note confirms receipt only; it is not a legal review.\n\nPlease don't sign or send the contract to the counterparty until you hear from Legal.",
         "options": {
           "appendAttribution": false
         }
@@ -492,7 +534,7 @@
       "type": "n8n-nodes-base.gmail",
       "typeVersion": 2.2,
       "position": [
-        3950,
+        4170,
         0
       ],
       "name": "Acknowledge requester",
@@ -517,7 +559,7 @@
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.5,
       "position": [
-        4170,
+        4390,
         0
       ],
       "name": "Mark completed",
@@ -526,12 +568,12 @@
     {
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "// Collects everything a reviewer needs in one record: the request, what the agent\n// proposed, why the guardrails stopped it, and the tool calls behind it.\nconst intake = $('Normalize intake').item.json;\nlet agent = null;\nlet guard = null;\ntry { agent = $('Contract intake agent').item.json; } catch (e) {}\ntry { guard = $('Guardrails').item.json; } catch (e) {}\n\nconst reasons = [...(guard?.guardrail_reasons ?? [])];\nif ($json.error) reasons.push('system_error: ' + ($json.error.message ?? JSON.stringify($json.error)).slice(0, 300));\nif ($json.verify_failed) reasons.push('verification_failed: ' + $json.verify_detail);\nif ($json.handoff_reason) reasons.push($json.handoff_reason);\nif (!agent?.output && !reasons.length) reasons.push('agent_produced_no_valid_output');\nif (!reasons.length) {\n  const o = agent.output;\n  reasons.push('agent recommends review: ' + (o.decision ?? o.recommended_action ?? o.classification ?? o.route_to_queue ?? 'see proposal'));\n}\n\nconst trace = (agent?.intermediateSteps ?? []).map((s) => ({\n  tool: s.action?.tool,\n  input: s.action?.toolInput,\n  observation: String(s.observation ?? '').slice(0, 1500),\n}));\n\nreturn {\n  json: {\n    business_key: intake.business_key,\n    team: \"legal triage\",\n    reasons,\n    proposed: agent?.output ?? null,\n    confidence: agent?.output?.confidence ?? null,\n    questions: agent?.output?.questions_for_human ?? [],\n    trace,\n    summary: 'Intake ' + intake.intake_id + ' from ' + intake.requester_name + ' · ' + (agent?.output?.contract_type ?? 'unclassified') + ' · counterparty ' + (agent?.output?.counterparty_name ?? intake.counterparty_stated ?? 'unknown'),\n  },\n};"
+        "jsCode": "// Collects everything a reviewer needs in one record: the request, what the agent\n// proposed, why the guardrails stopped it, and the tool calls behind it.\n// Every lookup is guarded: this node is the safety net, so it must never be the step that fails.\n// n8n links each item back to the request it came from. That link can break after the AI\n// Agent node (seen live), so fall back to the node's output when it holds exactly one item,\n// which cannot be ambiguous.\nconst one = (name) => { try { return $(name).item.json; } catch (e) { const all = $(name).all(); if (all.length === 1) return all[0].json; throw e; } };\nlet intake = null;\nlet agent = null;\nlet guard = null;\ntry { intake = one('Normalize intake'); } catch (e) {}\ntry { agent = one('Contract intake agent'); } catch (e) {}\ntry { guard = one('Guardrails'); } catch (e) {}\n\nconst reasons = [...(guard?.guardrail_reasons ?? [])];\nif (!intake) {\n  // n8n could not link this item back to its request. Keep whatever identifies it and say so.\n  intake = { business_key: $json.business_key ?? null };\n  reasons.push('item_context_lost: the request could not be linked to this failure; check the n8n execution');\n}\nif ($json.error) reasons.push('system_error: ' + ($json.error.message ?? JSON.stringify($json.error)).slice(0, 300));\nif ($json.verify_failed) reasons.push('verification_failed: ' + $json.verify_detail);\nif ($json.handoff_reason) reasons.push($json.handoff_reason);\nif (!agent?.output && !reasons.length) reasons.push('agent_produced_no_valid_output');\nif (!reasons.length) {\n  const o = agent.output;\n  reasons.push('agent recommends review: ' + (o.decision ?? o.recommended_action ?? o.classification ?? o.route_to_queue ?? 'see proposal'));\n}\n\nconst REDACT = [].map((p) => new RegExp(p, 'g'));\nconst scrub = (text) => REDACT.reduce((t, r) => t.replace(r, '[redacted]'), String(text ?? ''));\n// The masks also apply to what the model wrote, in case it repeated a number it read.\nconst scrubJson = (v) => {\n  if (!REDACT.length || v == null) return v;\n  try { return JSON.parse(scrub(JSON.stringify(v))); } catch (e) { return scrub(JSON.stringify(v)); }\n};\nconst trace = (agent?.intermediateSteps ?? []).map((s) => ({\n  tool: s.action?.tool,\n  input: s.action?.toolInput,\n  observation: scrub(s.observation).slice(0, 1500),\n}));\n\nconst summary = ((e) => 'Intake ' + e(intake.intake_id) + ' from ' + e(intake.requester_name) + ' · ' + e(agent?.output?.contract_type || 'unclassified') + ' · counterparty ' + e(agent?.output?.counterparty_name || intake.counterparty_stated || 'unknown'))((s) => String(s ?? '').slice(0, 150));\n// Slack-safe copies: request, document and model text can contain Slack markup such as <!channel>.\nconst esc = (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nreturn {\n  json: {\n    business_key: intake.business_key,\n    team: \"legal triage\",\n    reasons,\n    proposed: scrubJson(agent?.output ?? null),\n    confidence: agent?.output?.confidence ?? null,\n    questions: scrubJson(agent?.output?.questions_for_human ?? []),\n    trace,\n    summary,\n    slack: { key: esc(intake.business_key), summary: esc(summary), reasons: esc(reasons.join('; ')) },\n  },\n};"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2850,
+        3070,
         600
       ],
       "name": "Build exception",
@@ -548,7 +590,7 @@
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.7,
       "position": [
-        3090,
+        3310,
         600
       ],
       "name": "Queue exception",
@@ -564,7 +606,7 @@
           "value": "={{ $('Config').first().json.slack_channel }}",
           "mode": "name"
         },
-        "text": "={{ ':large_orange_circle: *LegalTech · Contract intake agent* needs a decision\\n' + 'Ref: ' + $('Build exception').item.json.business_key + ' · exception #' + $json.id + '\\n' + $('Build exception').item.json.summary + '\\n' + 'Why: ' + $('Build exception').item.json.reasons.join('; ') }}",
+        "text": "={{ ':large_orange_circle: *LegalTech · Contract intake agent* needs a decision\\n' + 'Ref: ' + $('Build exception').item.json.slack.key + ' · exception #' + $json.id + '\\n' + $('Build exception').item.json.slack.summary + '\\n' + 'Why: ' + $('Build exception').item.json.slack.reasons }}",
         "otherOptions": {
           "includeLinkToWorkflow": false
         }
@@ -572,7 +614,7 @@
       "type": "n8n-nodes-base.slack",
       "typeVersion": 2.7,
       "position": [
-        3330,
+        3550,
         600
       ],
       "name": "Notify legal triage",
@@ -588,6 +630,12 @@
               "name": "outcome",
               "value": "escalated",
               "type": "string"
+            },
+            {
+              "id": "b303d456-02da-4d6a-aea8-f8be6e462bff",
+              "name": "business_key",
+              "value": "={{ $('Build exception').item.json.business_key }}",
+              "type": "string"
             }
           ]
         },
@@ -597,7 +645,7 @@
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.5,
       "position": [
-        3570,
+        3790,
         600
       ],
       "name": "Mark escalated",
@@ -606,12 +654,12 @@
     {
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "const intake = $('Normalize intake').item.json;\nlet agent = null;\nlet guard = null;\ntry { agent = $('Contract intake agent').item.json; } catch (e) {}\ntry { guard = $('Guardrails').item.json; } catch (e) {}\n\nreturn {\n  json: {\n    business_key: intake.business_key,\n    outcome: $json.outcome,\n    route: guard?.route ?? 'escalate',\n    decision: agent?.output ?? null,\n    guardrail_reasons: guard?.guardrail_reasons ?? [],\n    actions: guard?.planned_actions ?? [],\n    tool_calls: (agent?.intermediateSteps ?? []).length,\n  },\n};"
+        "jsCode": "// n8n links each item back to the request it came from. That link can break after the AI\n// Agent node (seen live), so fall back to the node's output when it holds exactly one item,\n// which cannot be ambiguous.\nconst one = (name) => { try { return $(name).item.json; } catch (e) { const all = $(name).all(); if (all.length === 1) return all[0].json; throw e; } };\nlet intake = null;\nlet agent = null;\nlet guard = null;\ntry { intake = one('Normalize intake'); } catch (e) {}\ntry { agent = one('Contract intake agent'); } catch (e) {}\ntry { guard = one('Guardrails'); } catch (e) {}\n\nreturn {\n  json: {\n    // Escalated runs carry the key from Build exception, so the audit row is written even if\n    // the request itself could not be looked up.\n    business_key: intake?.business_key ?? $json.business_key ?? null,\n    outcome: $json.outcome,\n    route: guard?.route ?? 'escalate',\n    decision: agent?.output ?? null,\n    guardrail_reasons: guard?.guardrail_reasons ?? [],\n    actions: guard?.planned_actions ?? [],\n    tool_calls: (agent?.intermediateSteps ?? []).length,\n  },\n};"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        4430,
+        4650,
         300
       ],
       "name": "Build audit record",
@@ -628,7 +676,7 @@
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.7,
       "position": [
-        4670,
+        4890,
         300
       ],
       "name": "Write audit record",
@@ -636,16 +684,16 @@
     },
     {
       "parameters": {
-        "content": "## 1 · Intake and text extraction\nThe intake form posts the requester, counterparty, context and a link to the PDF. The file is downloaded and its text extracted.\n**Scanned PDFs** extract to almost nothing and go straight to a person for OCR. **Config** holds the type-to-queue routing map.",
-        "height": 401,
-        "width": 1520,
+        "content": "## 1 · Intake and text extraction\nThe intake form posts the requester, counterparty, context and a link to the PDF. The link must be https on a host listed in **allowed_document_hosts** in Config; any other link goes to a person and is never fetched. The file is downloaded from the configured base for that host and its text extracted.\n**Scanned PDFs** extract to almost nothing and go straight to a person for OCR. **Config** holds the type-to-queue routing map.",
+        "height": 423,
+        "width": 1740,
         "color": 7
       },
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
       "position": [
         -50,
-        -226
+        -248
       ],
       "name": "Stage: intake",
       "id": "28aa1ad1-9cac-4aa4-aae3-5d0283cce60a"
@@ -653,47 +701,47 @@
     {
       "parameters": {
         "content": "## 2 · Classify (agent)\nClaude classifies the contract, extracts parties, law, term and value, finds existing master agreements in the CLM, and flags clauses that depart from the playbook with severity and a short excerpt.\nThe contract text is passed as quoted data. **It never approves, redlines or signs.**",
-        "height": 641,
+        "height": 663,
         "width": 770,
         "color": 6
       },
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
       "position": [
-        1510,
-        -226
+        1730,
+        -248
       ],
       "name": "Stage: observe and plan",
       "id": "7c529dfb-f276-4f44-a8ff-e8356f26f509"
     },
     {
       "parameters": {
-        "content": "## 3 · Guardrails\nThe queue comes from the **routing map in Config**, not from the model. Escalate if the agent's queue disagrees, the type is unmapped, the counterparty doesn't match the requester's, or confidence is low.\nHigh-risk contracts still route automatically, flagged high priority.",
-        "height": 401,
+        "content": "## 3 · Guardrails\nThe queue comes from the **routing map in Config**, not from the model. Escalate if the agent's queue disagrees, the type is unmapped, the agent gives no counterparty, the counterparty doesn't match the requester's, or confidence is low.\nHigh-risk contracts still route automatically, flagged high priority.",
+        "height": 423,
         "width": 420,
         "color": 3
       },
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
       "position": [
-        2320,
-        -226
+        2540,
+        -248
       ],
       "name": "Stage: guardrails",
       "id": "ed062d3d-c66f-4fde-ad79-999d41b569b0"
     },
     {
       "parameters": {
-        "content": "## 4 · Route and verify\nCreates the CLM matter (idempotent on intake id) with flags and summary, reads it back, posts to the legal queue channel, and sends the requester a **fixed** receipt that says it is not a legal review.",
-        "height": 401,
+        "content": "## 4 · Route and verify\nCreates the CLM matter (idempotent on intake id) with flags and summary, reads it back and checks reference, queue, priority, contract type and counterparty against the plan, posts a fixed message to the legal queue channel with contract text escaped, and sends the requester a **fixed** receipt that says it is not a legal review.",
+        "height": 423,
         "width": 1520,
         "color": 4
       },
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
       "position": [
-        2800,
-        -226
+        3020,
+        -248
       ],
       "name": "Stage: act and verify",
       "id": "8fbb5e60-4ae1-455b-a214-ef5ed191f164"
@@ -708,7 +756,7 @@
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
       "position": [
-        2800,
+        3020,
         484
       ],
       "name": "Stage: hand off",
@@ -724,7 +772,7 @@
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
       "position": [
-        4380,
+        4600,
         184
       ],
       "name": "Stage: audit",
@@ -732,7 +780,7 @@
     },
     {
       "parameters": {
-        "content": "## LegalTech · Contract intake agent\n**Job:** take contract intake off the legal desk. Read the document, classify it, compare it with the playbook, and open a matter in the right queue with the facts and clause flags an attorney needs first.\n\n**Flow:** intake → download and extract text → agent classifies and compares (read-only) → routing from a fixed map, cross-checked → create matter, read back, notify → hand off the rest → audit.\n\n**Never does**\n- Approves, redlines or signs\n- Tells the requester a contract is fine\n- Picks the queue on its own. The routing map decides.\n\n**Model:** Claude Opus 5, adaptive thinking, effort high.",
+        "content": "## LegalTech · Contract intake agent\n**Job:** take contract intake off the legal desk. Read the document, classify it, compare it with the playbook, and open a matter in the right queue with the facts and clause flags an attorney needs first.\n\n**Flow:** intake → check the document link against the allowlist → download and extract text → agent classifies and compares (read-only) → routing from a fixed map, cross-checked → create matter, read back, notify → hand off the rest → audit.\n\n**Never does**\n- Approves, redlines or signs\n- Tells the requester a contract is fine\n- Picks the queue on its own. The routing map decides.\n\n**Model:** Claude Opus 5, adaptive thinking, effort high.",
         "height": 372,
         "width": 620,
         "color": 5
@@ -748,7 +796,7 @@
     },
     {
       "parameters": {
-        "content": "## Setup\n1. Run **sql/schema.sql**. Select the Postgres credential on *Queue exception* and *Write audit record*.\n2. Credentials: **Anthropic**, **Header Auth** for the CLM and playbook APIs, **Gmail**, **Slack**. If document links need auth, add it to *Download contract*.\n3. **CLM endpoints are a gateway contract**: agreements search, matters create/read, playbooks. Map them to Ironclad, Agiloft, Icertis or your matter system.\n4. Edit **Config**: the **queue_by_type** routing map, text-length limits, confidence floor, channel.\n5. Test: `curl -X POST <test webhook URL> -H 'Content-Type: application/json' -d @samples/legaltech-contract-intake.json`",
+        "content": "## Setup\n1. Run **sql/schema.sql**. Select the Postgres credential on *Queue exception* and *Write audit record*.\n2. Credentials: **Anthropic**, **Header Auth** for the CLM and playbook APIs, **Gmail**, **Slack**. If document links need auth, add it to *Download contract*.\n3. **CLM endpoints are a gateway contract**: agreements search, matters create/read, playbooks. Map them to Ironclad, Agiloft, Icertis or your matter system.\n4. Edit **Config**: **allowed_document_hosts** (the document stores links may point at), the **queue_by_type** routing map, text-length limits, confidence floor, channel.\n5. Test: `curl -X POST <test webhook URL> -H 'Content-Type: application/json' -d @samples/legaltech-contract-intake.json`",
         "height": 314,
         "width": 620,
         "color": 1
@@ -790,7 +838,25 @@
       "main": [
         [
           {
+            "node": "Document link allowed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Document link allowed?": {
+      "main": [
+        [
+          {
             "node": "Download contract",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build exception",
             "type": "main",
             "index": 0
           }
@@ -849,6 +915,11 @@
         [
           {
             "node": "Contract intake agent",
+            "type": "ai_languageModel",
+            "index": 0
+          },
+          {
+            "node": "Contract intake agent · output schema",
             "type": "ai_languageModel",
             "index": 0
           }

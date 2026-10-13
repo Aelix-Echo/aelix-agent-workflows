@@ -1,6 +1,11 @@
 # Architecture
 
-All seven workflows share one design. They are generated from code (`src/lib.mjs` plus one file per workflow in `src/workflows/`), so the stage layout, guardrail pattern, hand-off and audit are identical across industries. Only the prompts, tools, schema and guardrail rules differ.
+This repository holds two sets of workflows on one design:
+
+- **Seven reference workflows** (`src/workflows/`), one per industry card on aelixecho.com/ai-agents.
+- **The product agents** (`src/products/<suite>/`), one per agent in the Aelix Echo agent catalogue. They are listed in [product-agents.md](product-agents.md), which is generated from the source.
+
+All workflows share one design. They are generated from code (`src/lib.mjs` plus one file per workflow in `src/workflows/`), so the stage layout, guardrail pattern, hand-off and audit are identical across industries. Only the prompts, tools, schema and guardrail rules differ.
 
 ## The six stages
 
@@ -37,6 +42,30 @@ flowchart LR
 - **Untrusted text is data.** Customer reasons, carrier notes, contract text and ticket descriptions are passed inside tags and labelled as data, not instructions.
 - **One place to tune.** Each workflow has a **Config** node with every limit, tolerance, URL, confidence floor and channel.
 
+## Product agents: three ways to finish
+
+The product agents add a named-approver step. Each one is built by `productAgent()` in `src/product.mjs` from a single spec, so all of them share the same stages, approval handling, hand-off and audit.
+
+| Pattern | Used when the catalogue says | What happens after the guardrails |
+|---|---|---|
+| **Approve, then act** | "a person approves", "after sign-off", "nothing is pushed until..." | The run pauses and sends the proposal to one named person in Slack (`approver_slack_user` in Config). Approve: act, then read back. Decline: recorded as declined. No answer within `approval_timeout_hours`: hand-off. |
+| **Envelope, else approve** | "acts alone only inside a pre-approved envelope", "planners approve above set limits" | Inside the envelope defined in Config, act and read back with no pause. Outside it, the named approver is asked first. |
+| **Draft for review** | "drafts ... the officer signs", "it never files" | Nothing is written, filed or sent. The draft is saved to `agent_drafts` and the named reviewer gets a direct message with ids only. |
+
+Approve and envelope agents also have a **no action** route for when the agent finds nothing to do (for example, no reorder needed); it is recorded, not escalated.
+
+The approval request is a direct message to the one person `approver_slack_user` names, and the audit row records that handle, the decision and the response time. n8n does not record which Slack user clicked the button, so keep `approver_slack_user` pointed at an individual, never a shared account or channel.
+
+## Tamper-evident audit
+
+`agent_runs` is append-only and hash-chained (see `sql/schema.sql`):
+
+- A trigger gives each new row a `chain_seq`, the previous row's hash, and a SHA-256 over that hash plus the row's content, inside a lock so the chain has no gaps or forks.
+- `UPDATE`, `DELETE` and `TRUNCATE` are refused.
+- `SELECT * FROM agent_runs_verify();` returns nothing when the chain is intact, or the first row where it breaks.
+
+This makes edits detectable, not impossible: a database superuser can disable the triggers. To catch that too, copy the latest `row_hash` on a schedule to storage the database owner cannot overwrite (for example write-once object storage).
+
 ## Model
 
 **Claude Opus 5** (`claude-opus-5`, set in `src/lib.mjs`) with adaptive thinking. Effort is high everywhere except Energy, which uses medium for high-volume triage. Prompt caching is on (5 minutes). Change the model on each workflow's `… · Claude` node, or in `MODEL_ID` and rebuild.
@@ -55,10 +84,11 @@ flowchart LR
 
 ## Data model
 
-`sql/schema.sql` (Postgres 13+) creates three tables:
+`sql/schema.sql` (Postgres 13+) creates four tables:
 
 | Table | Purpose |
 |---|---|
-| `agent_runs` | One row per run: outcome, route, the agent's decision, guardrail reasons, actions taken, tool-call count, model and n8n execution id |
+| `agent_runs` | One row per run: outcome, route, the agent's decision, guardrail reasons, actions taken, the approval (who, what, when), tool-call count, model and n8n execution id. Append-only and hash-chained. |
 | `agent_exceptions` | The human review queue: team, status, reasons, proposed action, confidence, the agent's questions, the full trace, and resolution fields |
 | `pa_worklist` | Healthcare prior-auth worklist. Holds PHI, so restrict access accordingly. |
+| `agent_drafts` | Drafts waiting for a named reviewer (draft-for-review agents), with review status and notes |

@@ -1,0 +1,9 @@
+{
+  "alert_id": "ALR-2026-118402",
+  "scenario_code": "TM-STRUCT-04",
+  "scenario_name": "Cash deposits just below reporting threshold",
+  "customer_ref": "CUST-00418873",
+  "alert_score": 78,
+  "generated_at": "2026-10-13T02:10:44Z",
+  "analyst_note": "Customer called branch last week about a new food truck business."
+}

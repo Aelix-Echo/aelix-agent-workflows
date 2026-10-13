@@ -1,0 +1,11 @@
+{
+  "alert_id": "IQ-ALR-20261013-0412",
+  "asset_id": "CMP-L3-07",
+  "asset_name": "Line 3 air compressor 7",
+  "site": "PLANT-OH-01",
+  "alert_type": "bearing_wear",
+  "severity": "high",
+  "detected_at": "2026-10-13T05:12:00Z",
+  "signal_summary": "Vibration at 2x running speed rising over 6 days on the drive-end bearing; motor current and discharge temperature trending up together.",
+  "operator_note": "Night shift heard a whine from the compressor during the 03:00 round. Still running."
+}

@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "n8n workflows for the seven industry agents on aelixecho.com/ai-agents",
+  "description": "n8n workflows for the Aelix Echo agents: seven reference workflows and the product agent catalogue",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Aelix-Echo/aelix-agent-workflows.git"
@@ -14,7 +14,7 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "build:check": "node scripts/build.mjs --check",
-    "test": "node test/guardrails.test.mjs",
+    "test": "node test/run.mjs",
     "validate": "node scripts/validate.mjs",
     "check": "npm run build:check && npm test && npm run validate"
   },

@@ -1,0 +1,11 @@
+{
+  "payment_id": "PAY-20261013-558120",
+  "rail": "IMPS",
+  "failure_code": "BENEFICIARY_BANK_TIMEOUT",
+  "failure_message": "No response from beneficiary bank within SLA",
+  "amount": 185000,
+  "currency": "INR",
+  "debtor_account": "XXXXXX4471",
+  "beneficiary_ifsc": "HDFC0001234",
+  "initiated_at": "2026-10-13T08:41:12Z"
+}

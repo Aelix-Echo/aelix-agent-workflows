@@ -1,9 +1,10 @@
-// Validates workflows/*.json two ways:
+// Validates every workflow JSON under workflows/ (including workflows/products/) two ways:
 //  1. n8n's own validator (@n8n/workflow-sdk validateWorkflow) against the node
 //     parameter schemas shipped with n8n-nodes-base and @n8n/n8n-nodes-langchain.
 //  2. Layout checks: every node sits inside exactly one sticky, stickies don't overlap.
 //
-// Usage: node scripts/validate.mjs
+// Usage: node scripts/validate.mjs                 everything under workflows/
+//        node scripts/validate.mjs products/fintech only that subfolder
 // Needs the n8n packages. Either `npm install` in this folder, or point
 // N8N_MODULES at a node_modules folder that has n8n installed.
 
@@ -38,8 +39,15 @@ const overlap = (a, b) =>
 
 let failed = false;
 const dir = path.join(root, 'workflows');
-for (const file of fs.readdirSync(dir).filter((f) => f.endsWith('.json')).sort()) {
-  const wf = JSON.parse(fs.readFileSync(path.join(dir, file), 'utf8'));
+const only = process.argv[2] ? path.join(dir, process.argv[2]) : dir;
+const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) =>
+  e.isDirectory() ? walk(path.join(d, e.name)) : e.name.endsWith('.json') ? [path.join(d, e.name)] : []);
+const ids = new Map();
+for (const full of walk(only).sort()) {
+  const file = path.relative(dir, full);
+  const wf = JSON.parse(fs.readFileSync(full, 'utf8'));
+  if (ids.has(wf.id)) console.log(`FAIL ${file}: workflow id ${wf.id} also used by ${ids.get(wf.id)}`), (failed = true);
+  ids.set(wf.id, file);
   const problems = [];
 
   const result = sdk.validateWorkflow(wf, { validateSchema: true });
@@ -66,7 +74,12 @@ for (const file of fs.readdirSync(dir).filter((f) => f.endsWith('.json')).sort()
       for (const out of outs) for (const c of out) if (!names.has(c.node)) problems.push(`graph: "${from}" connects to unknown node "${c.node}"`);
   }
 
-  if (JSON.stringify(wf).includes('—')) problems.push('style: contains an em-dash');
+  for (const n of nodes.filter((x) => x.type === 'n8n-nodes-base.code')) {
+    try { new Function('$json', '$', '$execution', '$now', n.parameters.jsCode); }
+    catch (e) { problems.push(`code: "${n.name}" does not compile: ${e.message}`); }
+  }
+
+  if (JSON.stringify(wf).includes('\u2014')) problems.push('style: contains an em-dash');
 
   console.log(`${problems.length ? 'FAIL' : 'ok  '} ${file}  (${nodes.length} nodes, ${stickies.length} stickies)`);
   for (const p of problems) console.log('     ' + p);

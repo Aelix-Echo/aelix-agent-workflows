@@ -1,0 +1,11 @@
+{
+  "event_id": "RSK-20261013-000412",
+  "patient_id": "pat-synth-0001",
+  "encounter_id": "enc-synth-0001",
+  "unit": "4W-MEDSURG",
+  "model": "deterioration-index",
+  "score_observation_id": "obs-synth-risk-0412",
+  "score": 62,
+  "previous_score": 41,
+  "scored_at": "2026-10-13T09:15:00Z"
+}

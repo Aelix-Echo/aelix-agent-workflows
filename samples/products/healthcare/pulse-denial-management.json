@@ -1,0 +1,20 @@
+{
+  "remit_id": "ERA-SYNTH-20261009-7731",
+  "claim_id": "CLM-SYNTH-771904",
+  "payer_id": "PAYER-SYNTH-COMM-A",
+  "payer_claim_control_number": "PCCN-SYNTH-55102",
+  "remit_date": "2026-10-09",
+  "adjustments": [
+    {
+      "group_code": "CO",
+      "reason_code": "197",
+      "amount": 1840
+    }
+  ],
+  "remark_codes": [
+    "N54"
+  ],
+  "billed_amount": 1840,
+  "paid_amount": 0,
+  "payer_letter": "Precertification/authorization/notification absent. If you disagree, submit a written appeal with supporting documentation."
+}

@@ -1,0 +1,10 @@
+{
+  "notice_id": "RCN-2026-1187",
+  "source": "regulatory-change-feed",
+  "regulator": "European Data Protection Board",
+  "jurisdiction": "EU",
+  "title": "Guidelines on processing personal data through connected vehicle telematics",
+  "published_on": "2026-10-08",
+  "effective_on": "2027-03-01",
+  "notice_text": "Controllers that process location data collected from connected vehicles must carry out a data protection impact assessment before processing begins. Controllers must retain raw location data for no longer than is necessary for the stated purpose and must document the retention period for each purpose. Data subjects must be informed of each recipient category before the first transfer."
+}

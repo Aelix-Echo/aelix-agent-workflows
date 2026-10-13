@@ -1,0 +1,10 @@
+{
+  "incident_id": "INC-2026-1013-07",
+  "project_id": "PRJ-RIVERSIDE-TOWER",
+  "site_id": "SITE-RT-01",
+  "incident_type": "property_damage",
+  "window_start": "2026-10-13T13:20:00Z",
+  "window_end": "2026-10-13T14:05:00Z",
+  "reported_by": "site-superintendent",
+  "report_note": "Telehandler backed into the temporary fence on the north gate while unloading rebar. Fence panel bent, no one nearby. Operator stopped and called it in."
+}

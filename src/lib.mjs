@@ -564,13 +564,17 @@ export function auditTail(wf, { x, y, agentName, intakeName, guardName }) {
 const intake = $('${intakeName}').item.json;
 let agent = null;
 let guard = null;
+let approval = null;
 try { agent = $('${agentName}').item.json; } catch (e) {}
 try { guard = $('${guardName}').item.json; } catch (e) {}
+// Present only on workflows with a named-approver step, and only if this run reached it.
+try { approval = $('Record approval').item.json; } catch (e) {}
 
 return {
   json: {
     business_key: intake.business_key,
     outcome: $json.outcome,
+    approval: approval ? { decision: approval.decision, approver: approval.approver, decided_at: approval.decided_at } : null,
     route: guard?.route ?? 'escalate',
     decision: agent?.output ?? null,
     guardrail_reasons: guard?.guardrail_reasons ?? [],
@@ -586,9 +590,9 @@ return {
       'Write audit record',
       [x + 240, y],
       `
-INSERT INTO agent_runs (workflow, business_key, outcome, route, decision, guardrail_reasons, actions, tool_calls, model, n8n_execution_id)
-VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8, $9, $10);`,
-      `={{ [ '${wf.slug}', $json.business_key ?? null, $json.outcome ?? 'unknown', $json.route ?? 'escalate', JSON.stringify($json.decision ?? null), JSON.stringify($json.guardrail_reasons ?? []), JSON.stringify($json.actions ?? []), $json.tool_calls ?? 0, '${MODEL_ID}', $execution.id ] }}`,
+INSERT INTO agent_runs (workflow, business_key, outcome, route, decision, guardrail_reasons, actions, approval, tool_calls, model, n8n_execution_id)
+VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9, $10, $11);`,
+      `={{ [ '${wf.slug}', $json.business_key ?? null, $json.outcome ?? 'unknown', $json.route ?? 'escalate', JSON.stringify($json.decision ?? null), JSON.stringify($json.guardrail_reasons ?? []), JSON.stringify($json.actions ?? []), JSON.stringify($json.approval ?? null), $json.tool_calls ?? 0, '${MODEL_ID}', $execution.id ] }}`,
     ),
   );
   wf.link('Build audit record', 'Write audit record');

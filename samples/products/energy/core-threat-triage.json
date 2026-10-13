@@ -1,0 +1,21 @@
+{
+  "alert_id": "SEC-2026-10-13-00871",
+  "source": "sentinel",
+  "domain": "it",
+  "rule_name": "Outbound beaconing to newly registered domain",
+  "severity": "high",
+  "asset_id": "AST-IT-WS-20417",
+  "hostname": "ops-ws-117",
+  "indicators": [
+    {
+      "type": "domain",
+      "value": "cdn-update-check.example"
+    },
+    {
+      "type": "ip",
+      "value": "203.0.113.48"
+    }
+  ],
+  "detected_at": "2026-10-13T06:12:40Z",
+  "description": "Host ops-ws-117 made 212 HTTPS requests at 60 second intervals to cdn-update-check.example (203.0.113.48), first seen 2026-10-12."
+}

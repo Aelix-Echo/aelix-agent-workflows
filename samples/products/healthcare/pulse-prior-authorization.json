@@ -1,0 +1,16 @@
+{
+  "pa_request_id": "PA-20261013-11902",
+  "patient_id": "pat-synth-0004",
+  "coverage_id": "cov-synth-0004",
+  "service_request_id": "sr-synth-0004",
+  "ordering_practitioner_id": "prac-synth-0233",
+  "cpt_codes": [
+    "72148"
+  ],
+  "icd10_codes": [
+    "M54.16",
+    "M51.26"
+  ],
+  "urgency": "standard",
+  "office_note": "Patient has done 8 weeks of PT. Payer portal says MRI needs PA."
+}

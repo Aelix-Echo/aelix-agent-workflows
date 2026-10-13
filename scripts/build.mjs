@@ -1,32 +1,86 @@
-// Generates workflows/*.json from src/workflows/*.mjs.
-// Usage: node scripts/build.mjs           write the JSON files
-//        node scripts/build.mjs --check   fail if a committed JSON file is out of date with its source
+// Generates the workflow JSON (and product-agent sample payloads) from source.
+//   src/workflows/*.mjs           -> workflows/*.json                       (reference workflows)
+//   src/products/<suite>/*.mjs    -> workflows/products/<suite>/*.json      (product agents)
+//                                    samples/products/<suite>/*.json        (their `sample` export)
+// Usage: node scripts/build.mjs           write the files
+//        node scripts/build.mjs --check   fail if a committed file is out of date with its source
+//        node scripts/build.mjs --suite fintech   only that product suite (skips reference workflows)
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const srcDir = path.join(root, 'src', 'workflows');
-const outDir = path.join(root, 'workflows');
 const check = process.argv.includes('--check');
-fs.mkdirSync(outDir, { recursive: true });
-
+const suiteArg = process.argv.includes('--suite') ? process.argv[process.argv.indexOf('--suite') + 1] : null;
 let stale = 0;
-for (const file of fs.readdirSync(srcDir).filter((f) => f.endsWith('.mjs')).sort()) {
-  const { default: build } = await import(pathToFileURL(path.join(srcDir, file)).href);
-  const wf = build();
-  const out = path.join(outDir, file.replace(/\.mjs$/, '.json'));
-  const json = JSON.stringify(wf.toJSON(), null, 2) + '\n';
+
+function emit(out, content, label) {
   const rel = path.relative(root, out);
   if (check) {
     const current = fs.existsSync(out) ? fs.readFileSync(out, 'utf8') : null;
-    if (current === json) console.log(`ok    ${rel}`);
+    if (current === content) console.log(`ok    ${rel}`);
     else { console.log(`STALE ${rel}  (run npm run build and commit the result)`); stale++; }
-    continue;
+    return;
   }
-  fs.writeFileSync(out, json);
-  const counts = wf.nodes.reduce((acc, n) => ((acc[n.type === 'n8n-nodes-base.stickyNote' ? 'stickies' : 'nodes']++), acc), { nodes: 0, stickies: 0 });
-  console.log(`${rel}  ${counts.nodes} nodes, ${counts.stickies} stickies`);
+  fs.mkdirSync(path.dirname(out), { recursive: true });
+  fs.writeFileSync(out, content);
+  console.log(`${rel}${label ? '  ' + label : ''}`);
+}
+
+const counts = (wf) => {
+  const c = wf.nodes.reduce((acc, n) => ((acc[n.type === 'n8n-nodes-base.stickyNote' ? 'stickies' : 'nodes']++), acc), { nodes: 0, stickies: 0 });
+  return `${c.nodes} nodes, ${c.stickies} stickies`;
+};
+const mjs = (dir) => (fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith('.mjs')).sort() : []);
+
+// Reference workflows
+const refDir = path.join(root, 'src', 'workflows');
+for (const file of suiteArg ? [] : mjs(refDir)) {
+  const { default: build } = await import(pathToFileURL(path.join(refDir, file)).href);
+  const wf = build();
+  emit(path.join(root, 'workflows', file.replace(/\.mjs$/, '.json')), JSON.stringify(wf.toJSON(), null, 2) + '\n', counts(wf));
+}
+
+// Product agents
+const prodDir = path.join(root, 'src', 'products');
+const slugs = new Set();
+const catalogue = [];
+for (const suite of fs.existsSync(prodDir) ? fs.readdirSync(prodDir).filter((d) => fs.statSync(path.join(prodDir, d)).isDirectory() && (!suiteArg || d === suiteArg)).sort() : []) {
+  for (const file of mjs(path.join(prodDir, suite))) {
+    const mod = await import(pathToFileURL(path.join(prodDir, suite, file)).href);
+    const wf = mod.default();
+    const base = file.replace(/\.mjs$/, '');
+    if (wf.spec.dir !== suite || wf.spec.file !== base) throw new Error(`${suite}/${file}: spec.dir/spec.file must be "${suite}"/"${base}"`);
+    if (slugs.has(wf.slug)) throw new Error(`duplicate slug ${wf.slug}`);
+    slugs.add(wf.slug);
+    emit(path.join(root, 'workflows', 'products', suite, `${base}.json`), JSON.stringify(wf.toJSON(), null, 2) + '\n', counts(wf));
+    if (!mod.sample) throw new Error(`${suite}/${file}: missing \`export const sample\``);
+    emit(path.join(root, 'samples', 'products', suite, `${base}.json`), JSON.stringify(mod.sample, null, 2) + '\n');
+    catalogue.push({ suite, base, spec: wf.spec });
+  }
+}
+
+// docs/product-agents.md is generated from the specs so it cannot drift from the workflows.
+if (!suiteArg) {
+  const MODE = { approve: 'Approve, then act', envelope: 'Envelope, else approve', draft: 'Draft for review' };
+  const trig = (t) => (t.kind === 'webhook' ? 'Webhook' : `Every ${t.minutes} min`);
+  const esc = (t) => String(t).replace(/\|/g, '\\|');
+  const bySuite = new Map();
+  for (const c of catalogue) bySuite.set(c.spec.industry, [...(bySuite.get(c.spec.industry) ?? []), c]);
+  let md = `# Product agents\n\nGenerated by \`scripts/build.mjs\` from \`src/products/\`. Do not edit by hand.\n\n`
+    + `${catalogue.length} agents across ${bySuite.size} suites. Each is an importable n8n workflow under \`workflows/products/\`, with a sample payload under \`samples/products/\`.\n\n`
+    + `| Pattern | What it means |\n|---|---|\n`
+    + `| Approve, then act | The agent drafts an action; a named person approves it in Slack; then the workflow acts and reads the result back |\n`
+    + `| Envelope, else approve | Inside a pre-approved envelope set in Config it acts on its own; anything outside asks the named approver |\n`
+    + `| Draft for review | Nothing is written, filed or sent; the draft goes to a named reviewer |\n\n`;
+  for (const [industry, list] of bySuite) {
+    md += `## ${industry} (${list.length})\n\n| Agent | Product | Pattern | Who decides | Trigger | Workflow |\n|---|---|---|---|---|---|\n`;
+    for (const { suite, base, spec } of list) {
+      md += `| ${spec.agent} | ${spec.product} | ${MODE[spec.mode]} | ${esc(spec.approves)} | ${trig(spec.trigger)} | [\`${base}\`](../workflows/products/${suite}/${base}.json) |\n`;
+    }
+    md += '\n';
+  }
+  emit(path.join(root, 'docs', 'product-agents.md'), md);
 }
 process.exit(stale ? 1 : 0);

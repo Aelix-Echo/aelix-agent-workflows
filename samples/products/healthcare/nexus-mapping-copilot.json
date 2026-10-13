@@ -1,0 +1,17 @@
+{
+  "mapping_request_id": "MAP-SYNTH-2026-0193",
+  "interface_id": "IF-ADT-SYNTH-LAB-01",
+  "message_type": "ADT^A08",
+  "target_profiles": [
+    "us-core-patient",
+    "us-core-encounter"
+  ],
+  "sample_message_ids": [
+    "MSG-SYNTH-0001",
+    "MSG-SYNTH-0002",
+    "MSG-SYNTH-0003",
+    "MSG-SYNTH-0004"
+  ],
+  "requested_by": "integration-engineer",
+  "change_request": "Map PID-13 phone and email into Patient.telecom and stop dropping PV1-19 visit number."
+}

@@ -3,9 +3,16 @@
 [![CI](https://github.com/Aelix-Echo/aelix-agent-workflows/actions/workflows/ci.yml/badge.svg)](https://github.com/Aelix-Echo/aelix-agent-workflows/actions/workflows/ci.yml)
 ![n8n 2.40.7](https://img.shields.io/badge/n8n-2.40.7-EA4B71)
 ![Node 24+](https://img.shields.io/badge/node-%E2%89%A524-339933)
-![Guardrail tests: 44](https://img.shields.io/badge/guardrail%20tests-44-blue)
+![Guardrail tests: 609](https://img.shields.io/badge/guardrail%20tests-609-blue)
 
-Seven n8n workflows, one for each industry card on [aelixecho.com/ai-agents](https://aelixecho.com/ai-agents). Each one runs the loop the page describes: observe, plan, act, verify, hand off.
+n8n workflows for the Aelix Echo agents: 45 in all.
+
+- **Seven reference workflows**, one for each industry card on [aelixecho.com/ai-agents](https://aelixecho.com/ai-agents) (below).
+- **38 product agents**, one for each agent in the Aelix Echo agent catalogue, across all seven suites. They are listed in [docs/product-agents.md](docs/product-agents.md), which is generated from the source.
+
+Each one runs the same loop: observe, plan, act, verify, hand off.
+
+## Reference workflows
 
 | # | Workflow | Industry | Work taken off the desk | Trigger |
 |---|---|---|---|---|
@@ -37,28 +44,35 @@ flowchart LR
 - **Every stop goes to one hand-off**, with the reasons, the proposal and the full tool-call trace, so a person can decide quickly.
 - **Every run is audited**, and customers and vendors only ever receive fixed templates.
 
+- **Product agents add a named approver.** Most pause and ask one named person in Slack before acting; some act on their own only inside a pre-approved envelope; some only produce a draft for a named reviewer. Every approval is recorded with who, what and when.
+- **The audit log is tamper-evident**: append-only and hash-chained, with a verify function that names the first altered row.
+
 More in [docs/architecture.md](docs/architecture.md), including what each workflow always leaves to a person.
 
 ## Quick start
 
 ```bash
-psql "$DATABASE_URL" -f sql/schema.sql                 # 1. audit and exception tables
-n8n import:workflow --separate --input=workflows/       # 2. import all seven
+psql "$DATABASE_URL" -f sql/schema.sql                 # 1. audit, exception and draft tables
+n8n import:workflow --separate --input=workflows/       # 2. the seven reference workflows
+for d in workflows/products/*/; do n8n import:workflow --separate --input="$d"; done   # 3. the product agents
 ```
 
-Then connect credentials, edit each **Config** node, and post a file from `samples/` to the test webhook. Full steps in [docs/setup.md](docs/setup.md).
+Then connect credentials, edit each **Config** node (including the named approver or reviewer), and post a file from `samples/` or `samples/products/` to the test webhook. Full steps in [docs/setup.md](docs/setup.md).
 
 ## Repository layout
 
 ```
 ├── workflows/          Ready-to-import n8n workflows (generated, do not edit by hand)
+│   └── products/       The 38 product agents, one folder per suite
 ├── src/
 │   ├── lib.mjs         Shared builders: agent, guardrails, hand-off, audit, stickies
-│   └── workflows/      One source file per workflow: prompts, tools, schema, rules
-├── test/               Guardrail, verification and hand-off scenarios (44)
+│   ├── product.mjs     Product-agent builder: approve, envelope and draft patterns
+│   ├── workflows/      One source file per reference workflow
+│   └── products/       One source file per product agent: prompts, tools, schema, rules, sample
+├── test/               Guardrail, approval, verification and hand-off scenarios (609)
 ├── scripts/            build.mjs (source to JSON) and validate.mjs (n8n validator)
-├── samples/            Example request payloads, one per workflow
-├── sql/                Postgres schema for runs, exceptions and the PA worklist
+├── samples/            Example request payloads, one per workflow (products/ for the product agents)
+├── sql/                Postgres schema: tamper-evident runs, exceptions, drafts, PA worklist
 ├── docs/               Architecture and setup guides
 └── .github/            CI, Dependabot, PR template, code owners
 ```
@@ -69,8 +83,8 @@ Every push runs [CI](.github/workflows/ci.yml):
 
 | Check | What it proves |
 |---|---|
-| Build check | The committed JSON is exactly what the source generates |
-| Guardrail tests | 44 scenarios across all seven workflows, on Node 22 and 24, with no network or model |
+| Build check | The committed JSON, samples and docs/product-agents.md are exactly what the source generates |
+| Guardrail tests | 609 scenarios across all 45 workflows, on Node 22 and 24, with no network or model |
 | n8n validation | Node parameters pass n8n's own schema validator; canvas layout and connections are sound |
 | Secret scan | No credentials anywhere in the git history |
 
@@ -78,8 +92,8 @@ Run them locally with `npm run check`. See [CONTRIBUTING.md](CONTRIBUTING.md) fo
 
 ## Status
 
-- **Tested:** all seven import into n8n 2.40.7 and pass its validator; every Code node compiles; the guardrail, verification, safety-screen and hand-off logic passes 44 scenarios.
-- **Not yet tested:** live runs against Claude, Stripe, Salesforce or the gateway APIs. Run each workflow first with test-mode keys and staging endpoints.
+- **Tested:** all 45 import into n8n 2.40.7 and pass its validator; every Code node compiles; the guardrail, approval, verification and hand-off logic passes 609 scenarios. The tamper-evident audit schema was exercised on a real Postgres engine (PGlite): chaining, refused updates and deletes, and tamper detection.
+- **Not yet tested:** live runs against Claude, Slack approvals, or the gateway APIs. The product agents call a gateway contract per product (named in each Setup sticky) that has to be built or mapped to the real systems. Run each workflow first with test-mode keys and staging endpoints.
 
 ## Security
 

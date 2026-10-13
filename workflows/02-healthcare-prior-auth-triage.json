@@ -596,7 +596,7 @@
     {
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "const intake = $('Normalize request').item.json;\nlet agent = null;\nlet guard = null;\ntry { agent = $('Prior-auth agent').item.json; } catch (e) {}\ntry { guard = $('Guardrails').item.json; } catch (e) {}\n\nreturn {\n  json: {\n    business_key: intake.business_key,\n    outcome: $json.outcome,\n    route: guard?.route ?? 'escalate',\n    decision: agent?.output ?? null,\n    guardrail_reasons: guard?.guardrail_reasons ?? [],\n    actions: guard?.planned_actions ?? [],\n    tool_calls: (agent?.intermediateSteps ?? []).length,\n  },\n};"
+        "jsCode": "const intake = $('Normalize request').item.json;\nlet agent = null;\nlet guard = null;\nlet approval = null;\ntry { agent = $('Prior-auth agent').item.json; } catch (e) {}\ntry { guard = $('Guardrails').item.json; } catch (e) {}\n// Present only on workflows with a named-approver step, and only if this run reached it.\ntry { approval = $('Record approval').item.json; } catch (e) {}\n\nreturn {\n  json: {\n    business_key: intake.business_key,\n    outcome: $json.outcome,\n    approval: approval ? { decision: approval.decision, approver: approval.approver, decided_at: approval.decided_at } : null,\n    route: guard?.route ?? 'escalate',\n    decision: agent?.output ?? null,\n    guardrail_reasons: guard?.guardrail_reasons ?? [],\n    actions: guard?.planned_actions ?? [],\n    tool_calls: (agent?.intermediateSteps ?? []).length,\n  },\n};"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -610,9 +610,9 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "INSERT INTO agent_runs (workflow, business_key, outcome, route, decision, guardrail_reasons, actions, tool_calls, model, n8n_execution_id)\nVALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8, $9, $10);",
+        "query": "INSERT INTO agent_runs (workflow, business_key, outcome, route, decision, guardrail_reasons, actions, approval, tool_calls, model, n8n_execution_id)\nVALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb, $9, $10, $11);",
         "options": {
-          "queryReplacement": "={{ [ 'healthcare-prior-auth-triage', $json.business_key ?? null, $json.outcome ?? 'unknown', $json.route ?? 'escalate', JSON.stringify($json.decision ?? null), JSON.stringify($json.guardrail_reasons ?? []), JSON.stringify($json.actions ?? []), $json.tool_calls ?? 0, 'claude-opus-5', $execution.id ] }}"
+          "queryReplacement": "={{ [ 'healthcare-prior-auth-triage', $json.business_key ?? null, $json.outcome ?? 'unknown', $json.route ?? 'escalate', JSON.stringify($json.decision ?? null), JSON.stringify($json.guardrail_reasons ?? []), JSON.stringify($json.actions ?? []), JSON.stringify($json.approval ?? null), $json.tool_calls ?? 0, 'claude-opus-5', $execution.id ] }}"
         }
       },
       "type": "n8n-nodes-base.postgres",

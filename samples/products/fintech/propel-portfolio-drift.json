@@ -1,0 +1,18 @@
+{
+  "reviews": [
+    {
+      "review_id": "RV-20261013-00981",
+      "account_id": "ACC-55710231",
+      "model_id": "MDL-GROWTH-80-20",
+      "trigger": "scheduled_review",
+      "as_of": "2026-10-12"
+    },
+    {
+      "review_id": "RV-20261013-00982",
+      "account_id": "ACC-55710488",
+      "model_id": "MDL-BALANCED-60-40",
+      "trigger": "market_move",
+      "as_of": "2026-10-12"
+    }
+  ]
+}

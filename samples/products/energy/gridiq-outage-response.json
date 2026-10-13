@@ -1,0 +1,8 @@
+{
+  "outage_id": "OUT-2026-10-13-0442",
+  "feeder_id": "FDR-12-SOUTHGATE",
+  "substation_id": "SUB-SOUTHGATE",
+  "operated_device_id": "BRK-12",
+  "started_at": "2026-10-13T05:47:10Z",
+  "field_notes": "Troubleshooter reports recloser R-1207 locked out after three operations. No visible damage at the recloser. Patrolling toward Elm Rd."
+}

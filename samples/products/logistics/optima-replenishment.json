@@ -1,0 +1,18 @@
+{
+  "signals": [
+    {
+      "signal_id": "RS-90211",
+      "sku": "CTN-3340-BLK",
+      "location": "DC-DAL",
+      "signal": "projected_stockout",
+      "projected_stockout_date": "2026-10-24"
+    },
+    {
+      "signal_id": "RS-90212",
+      "sku": "PAL-WRAP-18",
+      "location": "DC-ATL",
+      "signal": "demand_spike",
+      "projected_stockout_date": "2026-10-19"
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "load_id": "LD-4471982",
+  "customer": "CUST-20817",
+  "origin": "DC-DAL (Dallas, TX)",
+  "destination": "Memphis, TN 38118",
+  "pickup_window_start": "2026-10-14T11:00:00Z",
+  "pickup_window_end": "2026-10-14T14:00:00Z",
+  "delivery_due": "2026-10-15T02:00:00Z",
+  "equipment_type": "reefer",
+  "hazmat": false,
+  "weight_lbs": 38000,
+  "shipper_instructions": "Pre-cool trailer to 34 F before arrival. Driver must check in at gate 3. Lumper paid by consignee."
+}

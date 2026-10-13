@@ -1,0 +1,9 @@
+{
+  "project_id": "PRJ-HUDSON-YARD-B",
+  "clash_test_id": "CT-L04-MEP-VS-STR",
+  "run_id": "RUN-2026-10-13-0612",
+  "test_name": "Level 4 MEP vs structure",
+  "model_version": "federated-v57",
+  "ran_at": "2026-10-13T06:12:00Z",
+  "clash_count": 143
+}

@@ -1,0 +1,7 @@
+{
+  "task_id": "EMPI-TASK-SYNTH-40219",
+  "record_a": "EMPI-SYNTH-1000231",
+  "record_b": "EMPI-SYNTH-1007754",
+  "engine_score": 0.91,
+  "reason": "probable_duplicate"
+}

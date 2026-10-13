@@ -1,0 +1,9 @@
+{
+  "alert_id": "ALR-SYNTH-20261013-66120",
+  "device_id": "DEV-SYNTH-PACS-0042",
+  "source": "medical-device-security-platform",
+  "alert_type": "unusual_outbound_connection",
+  "severity": "medium",
+  "detected_at": "2026-10-13T03:22:51Z",
+  "description": "Device contacted 203.0.113.45:443, not seen in the 30-day baseline."
+}

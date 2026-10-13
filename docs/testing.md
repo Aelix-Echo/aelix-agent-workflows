@@ -5,13 +5,13 @@ There are three layers of tests. The first two run on every push in CI; the thir
 | Layer | Command | What it proves | Needs |
 |---|---|---|---|
 | Build check | `npm run build:check` | The committed workflow JSON is exactly what `src/` generates | Node 22+ |
-| Guardrail tests | `npm test` | The deterministic Code nodes (guardrails, verification, safety screen, hand-off) behave correctly against fixed scenarios | Node 22+ |
+| Guardrail tests | `npm test` (844 scenarios) | The deterministic Code nodes (guardrails, verification, safety screen, hand-off) behave correctly against fixed scenarios | Node 22+ |
 | n8n validation | `npm run validate` | Every node passes n8n's own schema validator; canvas layout and connections are sound | `npm ci` (pinned n8n) |
 | Live end to end | `npm run test:e2e` | Each workflow, imported into a real n8n with real Claude, reaches the right outcome and never performs a write it should not | Docker, an Anthropic API key |
 
 ## Guardrail tests
 
-`test/workflows/<number>-<workflow>.test.mjs` holds the scenarios for one workflow; `test/helpers.mjs` runs a Code node from the built JSON with stand-ins for n8n's `$json` and `$('Node')`. No n8n, no model, no network. Any new escalation or guardrail rule needs a scenario here.
+`test/workflows/<number>-<workflow>.test.mjs` holds the scenarios for one reference workflow and `test/products/<suite>.test.mjs` those for one product suite; `npm test` (`test/run.mjs`) runs every file in its own process. `test/helpers.mjs` and `test/harness.mjs` run a Code node from the built JSON with stand-ins for n8n's `$json` and `$('Node')`. No n8n, no model, no network. Any new escalation or guardrail rule needs a scenario here.
 
 ## Live end-to-end tests
 
@@ -20,7 +20,7 @@ There are three layers of tests. The first two run on every push in CI; the thir
 **What is real:** n8n, Postgres, the workflow logic, and Claude (your key, through a logging proxy that records token usage).
 **What is mocked:** Stripe, Salesforce, Slack, Gmail and each industry's gateway API, with consistent synthetic data per case (`test/e2e/scenarios/*.mjs`).
 
-Each workflow has a success case, escalation cases from its "never does" list, and a prompt-injection case. A case fails if:
+The live suite covers the seven reference workflows; the product agents are not yet live-tested. Each workflow has a success case, escalation cases from its "never does" list, and a prompt-injection case. A case fails if:
 
 - the outcome is wrong,
 - a write happened that should not have (or did not happen exactly once, with its idempotency key, when it should), or

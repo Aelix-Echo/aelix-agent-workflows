@@ -1,46 +1,101 @@
-// Generates workflows/*.json from src/workflows/*.mjs.
-// Usage: node scripts/build.mjs           write the JSON files
-//        node scripts/build.mjs --check   fail if a committed JSON file is out of date with its source
-//        node scripts/build.mjs 03        build only the sources whose file name starts with 03
+// Generates the workflow JSON (and product-agent sample payloads) from source.
+//   src/workflows/*.mjs           -> workflows/*.json                       (reference workflows)
+//   src/products/<suite>/*.mjs    -> workflows/products/<suite>/*.json      (product agents)
+//                                    samples/products/<suite>/*.json        (their `sample` export)
+// Usage: node scripts/build.mjs           write the files
+//        node scripts/build.mjs --check   fail if a committed file is out of date with its source
+//        node scripts/build.mjs --suite fintech   only that product suite (skips reference workflows)
+//        node scripts/build.mjs 03                only the reference sources whose file name starts with 03
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const srcDir = path.join(root, 'src', 'workflows');
-const outDir = path.join(root, 'workflows');
 const check = process.argv.includes('--check');
-const only = process.argv.slice(2).filter((a) => !a.startsWith('--'));
-fs.mkdirSync(outDir, { recursive: true });
-
+const suiteArg = process.argv.includes('--suite') ? process.argv[process.argv.indexOf('--suite') + 1] : null;
+const refOnly = process.argv.slice(2).filter((a) => !a.startsWith('--') && a !== suiteArg);
 let stale = 0;
-const expected = new Set();
-for (const file of fs.readdirSync(srcDir).filter((f) => f.endsWith('.mjs') && (!only.length || only.some((o) => f.startsWith(o)))).sort()) {
-  const { default: build } = await import(pathToFileURL(path.join(srcDir, file)).href);
-  // A source may build one workflow or several (e.g. a poller plus the sub-workflow it calls).
-  // Each is written as <number>-<slug>.json.
+
+function emit(out, content, label) {
+  const rel = path.relative(root, out);
+  if (check) {
+    const current = fs.existsSync(out) ? fs.readFileSync(out, 'utf8') : null;
+    if (current === content) console.log(`ok    ${rel}`);
+    else { console.log(`STALE ${rel}  (run npm run build and commit the result)`); stale++; }
+    return;
+  }
+  fs.mkdirSync(path.dirname(out), { recursive: true });
+  fs.writeFileSync(out, content);
+  console.log(`${rel}${label ? '  ' + label : ''}`);
+}
+
+const counts = (wf) => {
+  const c = wf.nodes.reduce((acc, n) => ((acc[n.type === 'n8n-nodes-base.stickyNote' ? 'stickies' : 'nodes']++), acc), { nodes: 0, stickies: 0 });
+  return `${c.nodes} nodes, ${c.stickies} stickies`;
+};
+const mjs = (dir) => (fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith('.mjs')).sort() : []);
+
+// Reference workflows. A source may build one workflow or several (Energy builds its poller
+// and the per-ticket triage it calls); each is written as <number>-<slug>.json.
+const refDir = path.join(root, 'src', 'workflows');
+const refExpected = new Set();
+for (const file of suiteArg ? [] : mjs(refDir).filter((f) => !refOnly.length || refOnly.some((o) => f.startsWith(o)))) {
+  const { default: build } = await import(pathToFileURL(path.join(refDir, file)).href);
   const prefix = file.match(/^(\d+)-/)[1];
   for (const wf of [].concat(build())) {
-    const out = path.join(outDir, `${prefix}-${wf.slug}.json`);
-    const rel = path.relative(root, out);
-    const json = JSON.stringify(wf.toJSON(), null, 2) + '\n';
-    expected.add(path.basename(out));
-    if (check) {
-      const current = fs.existsSync(out) ? fs.readFileSync(out, 'utf8') : null;
-      if (current === json) console.log(`ok    ${rel}`);
-      else { console.log(`STALE ${rel}  (run npm run build and commit the result)`); stale++; }
-      continue;
-    }
-    fs.writeFileSync(out, json);
-    const counts = wf.nodes.reduce((acc, n) => ((acc[n.type === 'n8n-nodes-base.stickyNote' ? 'stickies' : 'nodes']++), acc), { nodes: 0, stickies: 0 });
-    console.log(`${rel}  ${counts.nodes} nodes, ${counts.stickies} stickies`);
+    const name = `${prefix}-${wf.slug}.json`;
+    refExpected.add(name);
+    emit(path.join(root, 'workflows', name), JSON.stringify(wf.toJSON(), null, 2) + '\n', counts(wf));
+  }
+}
+// A reference JSON that no source builds any more (e.g. after a rename) is stale too.
+if (!suiteArg && !refOnly.length) {
+  for (const f of fs.readdirSync(path.join(root, 'workflows')).filter((f) => f.endsWith('.json') && !refExpected.has(f))) {
+    if (check) { console.log(`STALE workflows/${f}  (no source builds it; delete it)`); stale++; }
+    else { fs.rmSync(path.join(root, 'workflows', f)); console.log(`removed workflows/${f}  (no source builds it)`); }
   }
 }
 
-// A JSON file that no source builds any more (e.g. after a rename) is stale too.
-for (const f of only.length ? [] : fs.readdirSync(outDir).filter((f) => f.endsWith('.json') && !expected.has(f))) {
-  if (check) { console.log(`STALE workflows/${f}  (no source builds it; delete it)`); stale++; }
-  else { fs.rmSync(path.join(outDir, f)); console.log(`removed workflows/${f}  (no source builds it)`); }
+// Product agents
+const prodDir = path.join(root, 'src', 'products');
+const slugs = new Set();
+const catalogue = [];
+for (const suite of refOnly.length ? [] : fs.existsSync(prodDir) ? fs.readdirSync(prodDir).filter((d) => fs.statSync(path.join(prodDir, d)).isDirectory() && (!suiteArg || d === suiteArg)).sort() : []) {
+  for (const file of mjs(path.join(prodDir, suite))) {
+    const mod = await import(pathToFileURL(path.join(prodDir, suite, file)).href);
+    const wf = mod.default();
+    const base = file.replace(/\.mjs$/, '');
+    if (wf.spec.dir !== suite || wf.spec.file !== base) throw new Error(`${suite}/${file}: spec.dir/spec.file must be "${suite}"/"${base}"`);
+    if (slugs.has(wf.slug)) throw new Error(`duplicate slug ${wf.slug}`);
+    slugs.add(wf.slug);
+    emit(path.join(root, 'workflows', 'products', suite, `${base}.json`), JSON.stringify(wf.toJSON(), null, 2) + '\n', counts(wf));
+    if (!mod.sample) throw new Error(`${suite}/${file}: missing \`export const sample\``);
+    emit(path.join(root, 'samples', 'products', suite, `${base}.json`), JSON.stringify(mod.sample, null, 2) + '\n');
+    catalogue.push({ suite, base, spec: wf.spec });
+  }
+}
+
+// docs/product-agents.md is generated from the specs so it cannot drift from the workflows.
+if (!suiteArg && !refOnly.length) {
+  const MODE = { approve: 'Approve, then act', envelope: 'Envelope, else approve', draft: 'Draft for review' };
+  const trig = (t) => (t.kind === 'webhook' ? 'Webhook' : `Every ${t.minutes} min`);
+  const esc = (t) => String(t).replace(/\|/g, '\\|');
+  const bySuite = new Map();
+  for (const c of catalogue) bySuite.set(c.spec.industry, [...(bySuite.get(c.spec.industry) ?? []), c]);
+  let md = `# Product agents\n\nGenerated by \`scripts/build.mjs\` from \`src/products/\`. Do not edit by hand.\n\n`
+    + `${catalogue.length} agents across ${bySuite.size} suites. Each is an importable n8n workflow under \`workflows/products/\`, with a sample payload under \`samples/products/\`.\n\n`
+    + `| Pattern | What it means |\n|---|---|\n`
+    + `| Approve, then act | The agent drafts an action; a named person approves it in Slack; then the workflow acts and reads the result back |\n`
+    + `| Envelope, else approve | Inside a pre-approved envelope set in Config it acts on its own; anything outside asks the named approver |\n`
+    + `| Draft for review | Nothing is written, filed or sent; the draft goes to a named reviewer |\n\n`;
+  for (const [industry, list] of bySuite) {
+    md += `## ${industry} (${list.length})\n\n| Agent | Product | Pattern | Who decides | Trigger | Workflow |\n|---|---|---|---|---|---|\n`;
+    for (const { suite, base, spec } of list) {
+      md += `| ${spec.agent} | ${spec.product} | ${MODE[spec.mode]} | ${esc(spec.approves)} | ${trig(spec.trigger)} | [\`${base}\`](../workflows/products/${suite}/${base}.json) |\n`;
+    }
+    md += '\n';
+  }
+  emit(path.join(root, 'docs', 'product-agents.md'), md);
 }
 process.exit(stale ? 1 : 0);

@@ -1,0 +1,11 @@
+{
+  "request_id": "DOC-20261013-00871",
+  "patient_id": "pat-synth-0002",
+  "encounter_id": "enc-synth-0002",
+  "author_practitioner_id": "prac-synth-0107",
+  "note_type": "progress_note",
+  "source_document_ids": [
+    "docref-synth-ambient-5521"
+  ],
+  "instructions": "Keep the assessment short. Mention the wound check."
+}

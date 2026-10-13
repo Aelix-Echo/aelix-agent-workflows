@@ -1,0 +1,10 @@
+{
+  "break_id": "BRK-2026-10-13-00412",
+  "recon_id": "NOSTRO-USD-CITI-NY",
+  "ledger_account": "110250",
+  "currency": "USD",
+  "break_amount": -35,
+  "value_date": "2026-10-12",
+  "break_type": "amount_mismatch",
+  "statement_narration": "OUR REF FT2610120098 CHG USD35 CORR BANK FEE"
+}

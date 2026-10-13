@@ -1,0 +1,20 @@
+{
+  "signals": [
+    {
+      "signal_id": "DRIFT-55102",
+      "building_id": "BLD-ONE-MARKET",
+      "zone_id": "L07-EAST-OPEN",
+      "point": "cooling_setpoint",
+      "drift_type": "energy_above_baseline",
+      "detected_at": "2026-10-13T05:30:00Z"
+    },
+    {
+      "signal_id": "DRIFT-55107",
+      "building_id": "BLD-ONE-MARKET",
+      "zone_id": "L02-LAB-A",
+      "point": "heating_setpoint",
+      "drift_type": "simultaneous_heat_cool",
+      "detected_at": "2026-10-13T05:45:00Z"
+    }
+  ]
+}

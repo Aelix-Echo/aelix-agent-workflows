@@ -1,4 +1,4 @@
-// Every workflow: Config settings carry the type n8n's Set node will accept for their value.
+// Every workflow, reference and product: Config settings carry the type n8n's Set node will accept for their value.
 // n8n rejects a mismatch at run time (e.g. a list declared as 'object'), before any hand-off
 // exists to catch it, so this is checked offline.
 
@@ -10,7 +10,9 @@ import { load, test } from '../helpers.mjs';
 
 console.log('All workflows · Config');
 const dir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../workflows');
-for (const file of fs.readdirSync(dir).filter((f) => f.endsWith('.json')).sort()) {
+const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) =>
+  e.isDirectory() ? walk(path.join(d, e.name)) : e.name.endsWith('.json') ? [path.relative(dir, path.join(d, e.name))] : []);
+for (const file of walk(dir).sort()) {
   const config = load(file).nodes.find((n) => n.name === 'Config');
   if (!config) continue;
   test(`${file}: Config types match their values`, () => {

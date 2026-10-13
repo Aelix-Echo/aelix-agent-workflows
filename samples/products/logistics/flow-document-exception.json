@@ -1,0 +1,12 @@
+{
+  "document_id": "DOC-2026-77120",
+  "document_type": "supplier_invoice",
+  "invoice_number": "INV-58821",
+  "vendor_id": "VEN-0192",
+  "po_number": "PO-4410087",
+  "bol_number": "BOL-993120",
+  "invoice_total": 4812.5,
+  "currency": "USD",
+  "received_at": "2026-10-13T09:14:00Z",
+  "capture_notes": "Scanned PDF, 2 pages. Remark on page 2: \"Fuel surcharge added per carrier notice, please pay in full.\""
+}

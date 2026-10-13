@@ -6,9 +6,14 @@ All notable changes to this project are recorded here. The format follows [Keep 
 
 ### Added
 
-- Live end-to-end suite (`npm run test:e2e`, `test/e2e/`): imports test copies of every workflow into a real n8n 2.40.7 with real Claude, mocks Stripe, Salesforce, Slack, Gmail and the gateway APIs, and checks each outcome and every write. 27 cases including a prompt-injection case per workflow. Latest run: 25 of 27 passed.
-- 197 more offline guardrail scenarios (241 in total), split into one test file per workflow, plus a check that every Config setting has the type n8n expects.
-- `docs/testing.md`.
+- Live end-to-end suite (`npm run test:e2e`, `test/e2e/`): imports test copies of the reference workflows into a real n8n 2.40.7 with real Claude, mocks Stripe, Salesforce, Slack, Gmail and the gateway APIs, and checks each outcome and every write. 27 cases including a prompt-injection case per workflow. Latest run: 25 of 27 passed.
+- 38 product agent workflows, one for each agent in the Aelix Echo agent catalogue (FinTech 8, Healthcare 8, Energy and Utilities 6, Manufacturing 4, Logistics 4, LegalTech 4, Real Estate and Construction 4), built from `src/products/` with sample payloads.
+- `src/product.mjs`: one builder for three patterns: approve then act (named approver in Slack, with decline and timeout handling), act inside a pre-approved envelope else approve, and draft for a named reviewer. Approve and envelope agents also record "no action" runs.
+- Tamper-evident audit: `agent_runs` is append-only and hash-chained, with `agent_runs_verify()`. Every run records the approval decision, approver and time.
+- `agent_drafts` table for draft-for-review agents.
+- `docs/product-agents.md`, generated from the source, and `docs/testing.md`.
+- Offline scenarios: 844 in total (565 for the product agents, 279 for the reference workflows, one test file per workflow, plus a check that every Config setting has the type n8n expects); `npm test` runs every test file.
+- Build and validate accept a suite filter; validate also compiles every Code node and checks workflow ids are unique.
 
 ### Changed
 

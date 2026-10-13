@@ -1,0 +1,14 @@
+{
+  "recall_case_id": "RC-2026-0093",
+  "trigger": "supplier_notice",
+  "opened_by": "quality-engineer",
+  "opened_at": "2026-10-13T07:55:00Z",
+  "suspect_lots": [
+    {
+      "lot_id": "RES-PP-240917-A",
+      "item_id": "RM-PP-RESIN-110",
+      "site": "PLANT-TX-01"
+    }
+  ],
+  "description": "Resin supplier notice: lot RES-PP-240917-A shipped with melt flow index above specification. Supplier asks that affected material be held pending their investigation."
+}

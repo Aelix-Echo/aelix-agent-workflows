@@ -11,6 +11,7 @@ The JSON files in `workflows/` are **generated**. Edit the source in `src/`, the
 | `scripts/build.mjs` | Writes `workflows/*.json` from `src/workflows/` (a source may build several, e.g. Energy's poller); `--check` verifies without writing; `node scripts/build.mjs 03` builds one |
 | `scripts/validate.mjs` | n8n's own validator plus layout and graph checks |
 | `test/workflows/0N-*.test.mjs` | Offline scenarios for one workflow: run its Guardrails, Verify, Safety screen and hand-off Code nodes from the built JSON (`test/helpers.mjs`) |
+| `test/products/<suite>.test.mjs` | Offline scenarios for one product suite (`test/harness.mjs`) |
 | `test/e2e/` | Live end-to-end suite: real n8n and Claude, mocked business systems. See [docs/testing.md](docs/testing.md) |
 
 You can also edit imported workflows directly in the n8n editor. Changes made that way are not reflected here until they are ported back to `src/`.
@@ -21,7 +22,7 @@ Requires Node 24 or later (see `.nvmrc`), which n8n 2.40.7 needs. The build chec
 
 ```bash
 npm run build        # src/workflows/*.mjs -> workflows/*.json
-npm test             # 241 guardrail and verification scenarios; no install, no network
+npm test             # 844 guardrail, approval and verification scenarios; no install, no network
 npm ci               # pulls the pinned n8n 2.40.7 for validation (large)
 npm run validate     # n8n's validator + layout checks
 npm run check        # all of the above, as CI runs it
@@ -33,7 +34,7 @@ npm run test:e2e     # live end to end with real Claude (needs Docker and an API
 Every push and pull request runs `.github/workflows/ci.yml`:
 
 1. **Build check** on Node 22 and 24: the committed JSON matches `src/`.
-2. **Guardrail tests** on Node 22 and 24: the 241 scenarios pass.
+2. **Guardrail tests** on Node 22 and 24: the 844 scenarios pass (`test/run.mjs` runs each test file in its own process).
 3. **n8n validation**: node parameters pass n8n's schema validator; every node sits in exactly one stage sticky; stickies do not overlap; every connection points at a real node; no em-dashes in sticky or prompt text.
 4. **Secret scan** of the full history with gitleaks.
 

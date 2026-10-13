@@ -1,0 +1,20 @@
+{
+  "candidates": [
+    {
+      "candidate_id": "RPC-2026-10-0193",
+      "sweep_id": "SWEEP-2026-10-13-02",
+      "premise_id": "PRM-4471029",
+      "meter_id": "MTR-88120455",
+      "rule": "tamper_event_with_consumption_drop",
+      "sweep_score": 0.82
+    },
+    {
+      "candidate_id": "RPC-2026-10-0194",
+      "sweep_id": "SWEEP-2026-10-13-02",
+      "premise_id": "PRM-3310874",
+      "meter_id": "MTR-77019342",
+      "rule": "reverse_energy_on_non_net_metered",
+      "sweep_score": 0.71
+    }
+  ]
+}

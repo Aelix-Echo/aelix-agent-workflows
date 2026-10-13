@@ -1,0 +1,22 @@
+{
+  "contracts": [
+    {
+      "contract_id": "PPA-WND-0217",
+      "project_id": "PRJ-HIGHRIDGE-WIND",
+      "offtaker": "Offtaker A",
+      "period_id": "2026-Q4",
+      "period_start": "2026-10-01",
+      "period_end": "2026-12-31",
+      "delivery_node": "HUB-NORTH"
+    },
+    {
+      "contract_id": "PPA-SOL-0388",
+      "project_id": "PRJ-MESA-SOLAR",
+      "offtaker": "Offtaker B",
+      "period_id": "2026-10",
+      "period_start": "2026-10-01",
+      "period_end": "2026-10-31",
+      "delivery_node": "HUB-SOUTH"
+    }
+  ]
+}

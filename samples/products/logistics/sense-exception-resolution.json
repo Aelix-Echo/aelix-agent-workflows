@@ -1,0 +1,11 @@
+{
+  "alert_id": "TA-20261013-30418",
+  "shipment_id": "SHP-7720419",
+  "logger_id": "LGR-ST-55102",
+  "sku": "VAC-INF-10DS",
+  "lot": "L2609A",
+  "alert_type": "high_temperature",
+  "detected_at": "2026-10-13T04:52:00Z",
+  "location": "Cross-dock MEM-02, door 14",
+  "alert_message": "Logger LGR-ST-55102 above 8.0 C for 25 min. Driver note: reefer showed defrost cycle, doors closed at 04:40."
+}

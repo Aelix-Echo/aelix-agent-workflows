@@ -1,0 +1,12 @@
+{
+  "work_order_id": "WO-884210",
+  "permit_types": [
+    "confined_space",
+    "hot_work"
+  ],
+  "asset_id": "AST-SUB7-VLT-03",
+  "location_id": "LOC-SUB7-VAULT-03",
+  "planned_start": "2026-10-16T07:00:00Z",
+  "requested_by": "maintenance-planner-sub7",
+  "work_description": "Cut out and re-weld corroded cable support bracket inside cable vault 3. Vault floor holds standing water after rain."
+}

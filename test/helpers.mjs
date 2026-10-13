@@ -29,3 +29,6 @@ export const test = (name, f) => {
   try { f(); results.passed++; console.log('  ok  ' + name); }
   catch (e) { results.failed++; console.log('  FAIL ' + name + '\n       ' + e.message); process.exitCode = 1; }
 };
+
+// Each test file runs in its own process (test/run.mjs); print its total when it finishes.
+process.on('exit', () => console.log(`\n${results.passed} passed${results.failed ? `, ${results.failed} failed` : ''}`));

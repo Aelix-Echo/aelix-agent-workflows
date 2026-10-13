@@ -7,7 +7,10 @@ const wf = load('04-logistics-shipment-exceptions.json');
 console.log('Logistics · Shipment exceptions');
 const Config = { max_rebook_cost_delta: 300, min_confidence: 0.85 };
 const req = { business_key: 'S-1:E-1', shipment_id: 'S-1', event_code: 'DELAYED' };
-const inDays = (n) => new Date(Date.now() + n * 86400000).toISOString();
+// One clock for the whole file: two separate Date.now() calls can differ by a millisecond,
+// which made exact ETA comparisons flaky.
+const NOW = Date.now();
+const inDays = (n) => new Date(NOW + n * 86400000).toISOString();
 const promised = inDays(3);
 const agent = (o = {}) => ({ output: {
   root_cause: 'weather', recommend_escalate: false, promised_delivery: promised, recommended_option_id: 'opt-2',

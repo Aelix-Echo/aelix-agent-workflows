@@ -1,0 +1,9 @@
+{
+  "signal_id": "CHS-20261013-30418",
+  "customer_id": "CUS-90031577",
+  "segment": "mass_affluent",
+  "churn_signal": "balance_outflow",
+  "churn_score": 0.74,
+  "detected_at": "2026-10-13T06:00:00Z",
+  "last_customer_message": "Moving my salary to another bank, their app is easier and fees are lower."
+}

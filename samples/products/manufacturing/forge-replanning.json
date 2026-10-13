@@ -1,0 +1,10 @@
+{
+  "stop_id": "STOP-20261013-L2-0031",
+  "site": "PLANT-MN-02",
+  "line_id": "L2-PKG",
+  "equipment_id": "SEALER-L2-01",
+  "reason_code": "EQUIP_FAILURE",
+  "stopped_at": "2026-10-13T09:40:00Z",
+  "expected_restart_at": "2026-10-14T06:00:00Z",
+  "operator_note": "Pouch sealer heater zone 2 fault, maintenance on site. Spare heater cartridge ordered."
+}

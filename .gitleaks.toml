@@ -1,0 +1,17 @@
+# Secret-scan configuration (CI runs `gitleaks git` over the full history).
+# Uses gitleaks' default rules, with one narrow exception.
+
+[extend]
+useDefault = true
+
+# The live end-to-end scenarios assert that writes carry the right idempotency key, e.g.
+#   assert.equal(posts[0].idempotency_key, 'approve-SI-E2E-3101', ...)
+# The generic API-key rule reads "idempotency_key" plus a value as a secret. These values are
+# synthetic test ids (always containing "-E2E-"), so they are allowed only in that file set
+# and only in that exact shape.
+[[allowlists]]
+description = "Synthetic idempotency keys asserted in e2e scenarios"
+condition = "AND"
+paths = ['''^test/e2e/scenarios/[^/]+\.mjs$''']
+regexTarget = "line"
+regexes = ['''idempotency_key, '[a-z]+-[A-Z]{2}-E2E-[A-Za-z0-9-]+''']
